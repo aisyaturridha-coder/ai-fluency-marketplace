@@ -33,7 +33,7 @@ ROOT = HERE.parents[2]
 
 # Bumped whenever the shipped files change. `update` compares this against the
 # published VERSION file; nothing else in the tool touches the network.
-VERSION = "1.1.0"
+VERSION = "1.1.1"
 UPDATE_BASE = ("https://raw.githubusercontent.com/aisyaturridha-coder/"
                "ai-fluency-marketplace/main/plugins/ai-fluency/skills/run-ai-fluency")
 UPDATE_FILES = ("VERSION", "SKILL.md", "driver.py", "extract-evidence.py")
@@ -565,8 +565,13 @@ def installed_version() -> str:
     return VERSION
 
 
-def _fetch(name: str) -> bytes:
+def _fetch(name: str, bust: str = "") -> bytes:
     """Fetch one published file, tolerating a broken Python CA bundle.
+
+    `bust` appends a cache-busting query. raw.githubusercontent.com caches for
+    minutes, and it expires files independently — so a fresh VERSION can arrive
+    alongside stale code, leaving a mixed install that reports the new number
+    while running the old logic. Keying every URL to the version prevents that.
 
     A Python installed from python.org ships without CA certificates until
     `Install Certificates.command` is run, so urllib raises
@@ -574,7 +579,7 @@ def _fetch(name: str) -> bytes:
     system trust store and is present on macOS and Windows 10+, so it is the
     fallback rather than disabling verification — which would defeat the point.
     """
-    url = f"{UPDATE_BASE}/{name}"
+    url = f"{UPDATE_BASE}/{name}" + (f"?v={bust}" if bust else "")
     try:
         import urllib.request
         req = urllib.request.Request(url, headers={"User-Agent": "ai-fluency-update"})
@@ -607,7 +612,8 @@ def cmd_update(dry_run: bool) -> int:
     print(f"  installed  {c(local, CYA)}")
 
     try:
-        remote = _fetch("VERSION").decode().strip()
+        import time
+        remote = _fetch("VERSION", bust=str(int(time.time()))).decode().strip()
     except Exception as e:
         print(f"  {c('could not reach the update server', RED)}")
         print(f"  {c(str(e), DIM)}")
@@ -622,7 +628,7 @@ def cmd_update(dry_run: bool) -> int:
     staged: dict[str, bytes] = {}
     for name in UPDATE_FILES:
         try:
-            staged[name] = _fetch(name)
+            staged[name] = _fetch(name, bust=remote)
         except Exception as e:
             print(f"  {c('failed to download ' + name, RED)} {c(str(e), DIM)}")
             print(f"\n  {c('Nothing was changed.', DIM)}")

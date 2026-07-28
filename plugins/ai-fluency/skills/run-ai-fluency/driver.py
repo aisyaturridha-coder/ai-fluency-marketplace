@@ -13,6 +13,7 @@ re-analysis cadence with no network call and nothing to set up.
   ./driver.py practices        ranked actions, each tied to the score it moves
   ./driver.py cadence          how often to re-run, derived from your own rate
   ./driver.py cert             self-issued record + reproducibility digest
+  ./driver.py report [-o F]    self-contained HTML: cert + transcript + advice
   ./driver.py update           pull the latest published version
   ./driver.py all              cert + score + practices + cadence
 
@@ -33,7 +34,7 @@ ROOT = HERE.parents[2]
 
 # Bumped whenever the shipped files change. `update` compares this against the
 # published VERSION file; nothing else in the tool touches the network.
-VERSION = "1.1.2"
+VERSION = "1.2.0"
 UPDATE_REPO = "aisyaturridha-coder/ai-fluency-marketplace"
 UPDATE_PATH = "plugins/ai-fluency/skills/run-ai-fluency"
 UPDATE_FILES = ("VERSION", "SKILL.md", "driver.py", "extract-evidence.py")
@@ -567,6 +568,216 @@ def load_pack(path: pathlib.Path) -> dict:
     return pack
 
 
+# --- HTML report -----------------------------------------------------------
+# Self-contained: one file, no assets, no network, safe to email or attach.
+
+ANCHOR_WORDS = {5: "Structural", 4: "Deliberate", 3: "Habitual",
+                2: "Unreliable", 1: "Occasional"}
+
+
+def _esc(s) -> str:
+    return (str(s).replace("&", "&amp;").replace("<", "&lt;")
+            .replace(">", "&gt;").replace('"', "&quot;"))
+
+
+def build_report(pack: dict, scores: dict, subject: str) -> str:
+    cert = certificate(pack, scores)
+    cad = cadence(pack)
+    prac = practices_for(scores, limit=6)
+    win = pack["window"]
+    order = [d for d in cert["profile_order"] if d in scores]
+
+    rows = []
+    for dim in order:
+        data = scores[dim]
+        rows.append(
+            f'<tr class="dim"><td colspan="5">{_esc(dim)}'
+            f'<span class="roll">{data["score"]}/5 · mean {data["raw"]:.2f}</span></td></tr>')
+        for s in data["subs"]:
+            rows.append(
+                f'<tr><td class="sig">{_esc(s["label"])}</td>'
+                f'<td class="n">{_esc(s["value"])}</td>'
+                f'<td><span class="g g{s["score"]}">{s["score"]}/5</span></td>'
+                f'<td class="n">{ANCHOR_WORDS[s["score"]]}</td>'
+                f'<td class="why">{_esc(s["why"])}</td></tr>')
+
+    prac_html = "".join(
+        f'<div class="rec"><h3>{i}. {_esc(p["title"])}</h3>'
+        f'<p class="meta">{_esc(p["dimension"])} · currently '
+        f'{_esc(p["value"])} → {p["sub_score"]}/5</p>'
+        f'<p>{_esc(p["body"])}</p>'
+        f'<p class="target">Target: {_esc(p["target"])}</p></div>'
+        for i, p in enumerate(prac, 1)) or \
+        '<p class="plain">Nothing scored 3 or below — re-check after the next window.</p>'
+
+    cad_rows = "".join(
+        f'<tr><td>{r["detectable_change_pp"]} point move</td>'
+        f'<td class="n">{r["sessions_per_window"]}</td>'
+        f'<td class="n">{r["days_at_current_rate"] or "—"}</td></tr>'
+        for r in cad["power_table"])
+
+    trend = ("Trajectory is readable." if cad["trend_ready"] else
+             f'Only {cad["monthly_points_available"]} monthly point(s) so far — '
+             "three are needed before any trend claim holds.")
+
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>AI Fluency Record — {_esc(subject)}</title><style>
+:root{{--paper:#F4F5F7;--card:#fff;--ink:#131A2B;--soft:#4A5464;--faint:#7C8593;
+--rule:#D5DAE1;--soft-rule:#E7EAEE;--seal:#1F6B63;--seal-bg:#E6F0EE;
+--flag:#C2571E;--flag-bg:#FBEDE4;--g1:#B03A2E;--g2:#C2571E;--g3:#B8860B;--g4:#3E7C59;--g5:#1F6B63}}
+@media(prefers-color-scheme:dark){{:root{{--paper:#0D1119;--card:#151B26;--ink:#E8EBEC;
+--soft:#A3ACBA;--faint:#737D8C;--rule:#29313D;--soft-rule:#1E2530;--seal:#5FBFAE;
+--seal-bg:#10241F;--flag:#E2814A;--flag-bg:#2A1B12;--g1:#E0705F;--g2:#E2814A;
+--g3:#D9AE64;--g4:#6FBF95;--g5:#5FBFAE}}}}
+*{{box-sizing:border-box}}body{{margin:0;background:var(--paper);color:var(--ink);
+padding:2.5rem 1.25rem 5rem;font:400 16px/1.6 ui-sans-serif,-apple-system,"Segoe UI",Roboto,sans-serif}}
+.wrap{{max-width:88ch;margin:0 auto}}.mono{{font-family:ui-monospace,SFMono-Regular,Menlo,monospace;
+font-variant-numeric:tabular-nums}}
+.cert{{background:var(--card);border:1px solid var(--ink);padding:clamp(1.5rem,5vw,3rem);position:relative}}
+.cert::after{{content:"";position:absolute;inset:7px;border:1px solid var(--rule);pointer-events:none}}
+.eyebrow{{font:500 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.2em;
+text-transform:uppercase;color:var(--seal);text-align:center}}
+h1{{font:400 clamp(1.6rem,4.5vw,2.3rem)/1.15 ui-serif,Georgia,serif;text-align:center;margin:.8rem 0 .4rem}}
+.subject{{text-align:center;font:400 1.05rem/1.4 ui-monospace,Menlo,monospace;color:var(--soft)}}
+.win{{text-align:center;font:400 12px/1.5 ui-monospace,Menlo,monospace;color:var(--faint);
+padding-bottom:1.6rem;margin-bottom:1.6rem;border-bottom:1px solid var(--rule)}}
+.facts{{display:grid;grid-template-columns:1fr;gap:1.4rem}}
+@media(min-width:700px){{.facts{{grid-template-columns:repeat(3,1fr);gap:0}}
+.facts>div+div{{border-left:1px solid var(--soft-rule)}}}}
+.fact{{text-align:center;padding:0 1rem}}
+.fact dt{{font:500 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.15em;
+text-transform:uppercase;color:var(--faint);margin-bottom:.6rem}}
+.big{{font:400 clamp(1.8rem,5vw,2.4rem)/1 ui-serif,Georgia,serif;display:block;margin-bottom:.35rem}}
+.note{{font-size:.82rem;line-height:1.45;color:var(--soft)}}
+.floor .big{{color:var(--flag)}}.posture .big{{color:var(--seal);font-size:clamp(1.1rem,3vw,1.4rem)}}
+.noavg{{margin-top:1.7rem;padding-top:1.3rem;border-top:1px solid var(--rule);font-size:.85rem;
+color:var(--soft);text-align:center;max-width:58ch;margin-left:auto;margin-right:auto}}
+.seal{{margin-top:1.7rem;background:var(--seal-bg);border:1px solid var(--seal);padding:1rem}}
+.seal dt{{font:500 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.15em;
+text-transform:uppercase;color:var(--seal);margin-bottom:.5rem}}
+.digest{{font-family:ui-monospace,Menlo,monospace;font-size:clamp(.66rem,2vw,.8rem);
+line-height:1.7;word-break:break-all}}
+.seal p{{margin:.7rem 0 0;font-size:.83rem;color:var(--soft)}}
+.disc{{margin-top:1.4rem;border:1px solid var(--flag);background:var(--flag-bg);
+padding:.9rem 1.1rem;font-size:.86rem;line-height:1.55}}.disc strong{{color:var(--flag)}}
+section{{margin-top:3.2rem}}h2{{font:400 1.45rem/1.2 ui-serif,Georgia,serif;margin:0 0 .3rem}}
+.sn{{color:var(--faint);font-size:.86rem;margin:0 0 1.3rem;padding-bottom:.8rem;border-bottom:2px solid var(--ink)}}
+h3{{font:600 .93rem/1.35 ui-sans-serif,-apple-system,sans-serif;margin:1.6rem 0 .4rem}}
+.scroll{{overflow-x:auto}}table{{border-collapse:collapse;width:100%;min-width:40rem;font-size:.87rem}}
+th,td{{text-align:left;padding:.55rem 1rem .55rem 0;border-bottom:1px solid var(--soft-rule);vertical-align:baseline}}
+th{{font:500 10px/1 ui-monospace,Menlo,monospace;letter-spacing:.13em;text-transform:uppercase;
+color:var(--faint);border-bottom:1px solid var(--rule);white-space:nowrap}}
+td.n{{font-family:ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;white-space:nowrap}}
+tr.dim td{{padding-top:1.4rem;border-bottom:1px solid var(--rule);font:600 .96rem/1.3 ui-sans-serif,sans-serif}}
+.roll{{font-family:ui-monospace,Menlo,monospace;font-weight:400;color:var(--faint);
+font-size:.84rem;margin-left:.6rem}}
+td.sig{{padding-left:1.3rem}}td.why{{color:var(--faint);font-size:.82rem}}
+.g{{display:inline-block;min-width:2.3rem;text-align:center;font-family:ui-monospace,Menlo,monospace;
+font-size:.77rem;font-weight:500;padding:.1em .45em;border:1px solid currentColor;border-radius:2px}}
+.g1{{color:var(--g1)}}.g2{{color:var(--g2)}}.g3{{color:var(--g3)}}.g4{{color:var(--g4)}}.g5{{color:var(--g5)}}
+.rec{{background:var(--card);border-left:3px solid var(--seal);padding:1rem 1.2rem;margin-bottom:1rem}}
+.rec h3{{margin:0 0 .3rem}}.rec p{{margin:0 0 .6rem;font-size:.9rem;color:var(--soft)}}
+.rec .meta{{font-family:ui-monospace,Menlo,monospace;font-size:.78rem;color:var(--faint)}}
+.rec .target{{color:var(--seal);font-family:ui-monospace,Menlo,monospace;font-size:.8rem;margin:0}}
+.plain{{color:var(--soft);font-size:.92rem}}ul{{padding-left:1.15rem}}li{{margin-bottom:.5rem;color:var(--soft);font-size:.9rem}}
+footer{{margin-top:3.5rem;padding-top:1.3rem;border-top:2px solid var(--ink);
+font-size:.83rem;color:var(--faint);line-height:1.6}}
+</style></head><body><div class="wrap">
+
+<article class="cert">
+<div class="eyebrow">AI Fluency Record · Self-issued</div>
+<h1>Certificate of AI Fluency Assessment</h1>
+<p class="subject">Subject: {_esc(subject)}</p>
+<p class="win">Anthropic 4D framework · {_esc((win.get("first_session") or "")[:10])} →
+{_esc((win.get("last_session") or "")[:10])} · {pack["volume"]["sessions"]} sessions</p>
+<dl class="facts">
+<div class="fact"><dt>Profile</dt><span class="big mono">{_esc(cert["profile"])}</span>
+<span class="note">Delegation, Description, Discernment, Diligence — reported as a set.</span></div>
+<div class="fact floor"><dt>Floor</dt><span class="big mono">{cert["floor"]}/5</span>
+<span class="note">Binding constraint: <strong>{_esc(cert["binding_constraint"])}</strong>.
+The set is limited by its weakest dimension.</span></div>
+<div class="fact posture"><dt>Safety posture</dt>
+<span class="big">{_esc(cert["safety_posture"].title())}</span>
+<span class="note">{_esc(cert["posture_note"])}</span></div>
+</dl>
+<p class="noavg">{_esc(cert["no_single_average"])}</p>
+<dl class="seal"><dt>Verification digest — SHA-256</dt>
+<dd class="digest">{_esc(cert["digest"])}</dd>
+<p>Computed over the window, session count and every scored value. Re-running
+<code>driver.py cert</code> against the same evidence file reproduces it exactly.</p></dl>
+<p class="disc"><strong>What this certifies, and what it does not.</strong>
+Generated by its own subject from their own local session transcripts.
+<strong>No organisation has accredited it.</strong> Its only claim to weight is that
+every figure is reproducible and the scoring rubric is published. It measures
+collaboration behaviour, never code quality.</p>
+</article>
+
+<section><h2>Transcript of record</h2>
+<p class="sn">Every sub-signal behind each dimension score, with the measured value and the
+anchor it maps to. Dimension scores are the rounded mean of their rows.</p>
+<div class="scroll"><table><thead><tr>
+<th style="width:32%">Signal</th><th style="width:11%">Measured</th><th style="width:9%">Grade</th>
+<th style="width:14%">Anchor</th><th>What it reads</th></tr></thead>
+<tbody>{"".join(rows)}</tbody></table></div>
+<h3>Grade anchors</h3>
+<p class="plain">Assigned by matching a measured value to a fixed band — never by judgement.
+5 Structural · 4 Deliberate · 3 Habitual · 2 Unreliable · 1 Occasional.</p>
+</section>
+
+<section><h2>How to raise these scores</h2>
+<p class="sn">Ranked by weakest signal. Each names the metric it should move, so the next
+run can check whether it worked.</p>
+{prac_html}</section>
+
+<section><h2>How often to re-evaluate</h2>
+<p class="sn">Derived from your own session rate, not a rule of thumb.</p>
+<p class="plain">Observed {cad["sessions_observed"]} sessions over {cad["calendar_days"]} days
+= <span class="mono">{cad["sessions_per_day"]}</span> per day. A re-run only tells you
+something if a real change would clear sampling noise.</p>
+<div class="scroll"><table><thead><tr><th>To detect</th><th>Sessions needed</th>
+<th>Days at your rate</th></tr></thead><tbody>{cad_rows}</tbody></table></div>
+<p class="plain"><strong>Recommended: re-run about every
+{cad["recommended_window_days"]} days</strong> ({cad["recommended_sessions"]} sessions) —
+the smallest window in which a 15-point move is distinguishable from chance. {trend}</p>
+</section>
+
+<section><h2>Method and limits</h2><p class="sn">Read before quoting any number above.</p>
+<ul>
+<li><strong>Framework.</strong> Anthropic's 4D AI Fluency framework, developed with
+Prof. Joseph Feller (University College Cork) and Prof. Rick Dakan (Ringling College).</li>
+<li><strong>Proxies, not measures.</strong> Transcripts record behaviour, not intent or
+correctness. Whether the agent was actually wrong is not visible.</li>
+<li><strong>Thresholds are uncalibrated.</strong> The framework is published; the numeric
+bands are a judgement call with no population data behind them.</li>
+<li><strong>Scores move with the window.</strong> A short window can shift a dimension by a
+full point. Treat any single run as approximate.</li>
+<li><strong>No peer benchmark.</strong> No population to compare against — no percentiles,
+no ranking.</li>
+</ul></section>
+
+<footer>Self-issued · Anthropic 4D framework · skill v{_esc(installed_version())} ·
+digest {_esc(cert["digest_short"])}. Not an accredited credential.</footer>
+</div></body></html>"""
+
+
+def cmd_report(pack: dict, scores: dict, out: pathlib.Path, subject: str) -> int:
+    html = build_report(pack, scores, subject)
+    out.parent.mkdir(parents=True, exist_ok=True)
+    out.write_text(html, encoding="utf-8")
+    try:
+        out.chmod(0o600)
+    except OSError:
+        pass
+    print(c("\nREPORT\n", BOLD))
+    print(f"  {c('written', GRN)}  {out}")
+    print(f"  {c(str(len(html) // 1024) + ' KB · certificate, transcript, '
+                'recommendations, cadence', DIM)}")
+    print(f"\n  {c('Open it in a browser. It is one self-contained file — no '
+                  'assets, no network.', DIM)}\n")
+    return 0
+
+
 def installed_version() -> str:
     f = HERE / "VERSION"
     if f.exists():
@@ -741,11 +952,15 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command",
                     choices=["check", "extract", "score", "practices", "cadence",
-                             "cert", "update", "all"])
+                             "cert", "report", "update", "all"])
     ap.add_argument("--pack", type=pathlib.Path, default=DEFAULT_PACK)
     ap.add_argument("--days", type=int, default=0)
     ap.add_argument("--no-samples", action="store_true")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("-o", "--out", type=pathlib.Path,
+                    help="report: where to write the HTML (default reports/)")
+    ap.add_argument("--subject", default=os.environ.get("USER", "me"),
+                    help="report: name to print on the certificate")
     ap.add_argument("--dry-run", action="store_true",
                     help="update: report what would change without writing")
     ap.add_argument("--freeze", action="store_true",
@@ -785,6 +1000,10 @@ def main() -> int:
                           "cadence": cadence(pack)}, indent=2))
         return 0
 
+    if args.command in ("report", "all"):
+        out = args.out or (BASE / "reports" /
+                           f"ai-fluency-{cert['digest_short']}.html")
+        cmd_report(pack, scores, out, args.subject)
     if args.command in ("cert", "all"):
         render_cert(cert)
     if args.command in ("score", "all"):

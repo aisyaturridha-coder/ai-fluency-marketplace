@@ -288,6 +288,36 @@ def t_ascii():
     return "no UnicodeEncodeError"
 
 
+@check("HTML report carries all four deliverables and matches the scores")
+def t_report():
+    m = load_driver()
+    pack = make_pack()
+    sc = m.score_pack(pack)
+    html = m.build_report(pack, sc, "tester")
+    for section in ("Certificate of AI Fluency", "Transcript of record",
+                    "How to raise these scores", "How often to re-evaluate"):
+        assert section in html, f"report is missing the {section!r} section"
+    cert = m.certificate(pack, sc)
+    assert cert["digest"] in html, "digest not embedded"
+    assert cert["profile"] in html, "profile not embedded"
+    for dim, data in sc.items():
+        for sub in data["subs"]:
+            assert sub["label"] in html, f"sub-signal missing: {sub['label']}"
+    assert html.count("<div") == html.count("</div>"), "unbalanced divs"
+    assert "http://" not in html, "report reaches out to the network"
+    return f"{len(html) // 1024} KB, self-contained"
+
+
+@check("report escapes values instead of injecting them raw")
+def t_report_escaping():
+    m = load_driver()
+    pack = make_pack()
+    html = m.build_report(pack, m.score_pack(pack), '<img src=x onerror=alert(1)>')
+    assert "<img src=x" not in html, "subject name was injected unescaped"
+    assert "&lt;img" in html, "subject name was not escaped"
+    return "subject escaped"
+
+
 @check("redaction covers the credential formats people actually paste")
 def t_redaction():
     ex = load_driver().find_extractor()
@@ -441,7 +471,7 @@ def t_agent_live():
 
 LOCAL = [t_import, t_extractor_compiles, t_high, t_low, t_bounds, t_degenerate,
          t_schema_guard, t_digest, t_no_average, t_cadence, t_cli, t_json,
-         t_ascii, t_redaction, t_perms, t_update_paths, t_no_injection, t_utf8]
+         t_ascii, t_report, t_report_escaping, t_redaction, t_perms, t_update_paths, t_no_injection, t_utf8]
 ONLINE = [t_online_version, t_online_consistency]
 AGENT = [t_agent_config, t_agent_rubric, t_agent_readonly]
 LIVE = [t_agent_live]

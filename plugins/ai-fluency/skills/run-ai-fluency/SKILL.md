@@ -1,6 +1,6 @@
 ---
 name: run-ai-fluency
-description: Run the AI fluency analysis — score your own AI collaboration skill against Anthropic's 4D framework from local Claude Code transcripts. Use for "run the fluency analysis", "score my AI skill", "how good am I at using AI", "what should I improve", "how often should I re-analyse", "analyse my sessions", "update the fluency skill", "am I on the latest version", "/run-ai-fluency". Scores locally with no API call or billing; only the update command uses the network.
+description: Run the AI fluency analysis — score your own AI collaboration skill against Anthropic's 4D framework from local Claude Code transcripts. Use for "run the fluency analysis", "score my AI skill", "how good am I at using AI", "what should I improve", "how often should I re-analyse", "analyse my sessions", "give me a report", "generate my certificate", "export as HTML", "update the fluency skill", "am I on the latest version", "/run-ai-fluency". Scores locally with no API call or billing; only the update command uses the network.
 ---
 
 # Run the AI fluency analysis
@@ -224,6 +224,28 @@ next run can check whether it worked:
      Delegation · currently 94.0 → 1/5
      Target: spend on top tiers → target under 70%
 ```
+
+### What `report` gives you — the shareable document
+
+Terminal output is fine for the operator, but useless to send anyone. `report`
+writes **one self-contained HTML file** carrying all four deliverables:
+
+```bash
+./.claude/skills/run-ai-fluency/driver.py report --subject "Your Name"
+./.claude/skills/run-ai-fluency/driver.py report -o ~/Desktop/my-fluency.html
+```
+
+Inside it: the **certificate** (profile, floor, safety posture, verification
+digest), the **transcript** (every sub-signal with its measured value, grade and
+anchor), **how to raise each score**, and **how often to re-evaluate** with the
+power table behind that recommendation.
+
+No assets, no network, no CDN — one file that opens in any browser and survives
+being emailed. Written `0600` like the rest of the operator's data. `all`
+produces it too.
+
+Reach for this whenever someone asks for their scores "as a report", "as a
+certificate", "as a document", or wants something to share.
 
 ### What `cert` gives you
 

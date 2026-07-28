@@ -891,7 +891,10 @@ def main() -> int:
 
     root = pathlib.Path(args.root)
     if not root.is_dir():
-        print(f"no transcript directory at {root}", file=sys.stderr)
+        # The commonest case by far is a brand-new install, not a broken one.
+        print(f"No Claude Code history found at {root}\n\n"
+              "Nothing to score yet — this is normal on a new machine. Use Claude "
+              "Code for a couple of weeks, then run this again.", file=sys.stderr)
         return 1
 
     cutoff = None

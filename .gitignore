@@ -1,0 +1,5 @@
+# Anyone running this generates their own behavioural data. Never commit it.
+evidence.json
+reports/
+__pycache__/
+.DS_Store

@@ -1,0 +1,7 @@
+{
+  "name": "ai-fluency",
+  "description": "Score your own AI collaboration skill against Anthropic's 4D AI Fluency framework, from your local Claude Code transcripts. Runs entirely on your machine — no API key, no billing, nothing leaves your laptop.",
+  "author": {
+    "name": "aisyaridha"
+  }
+}

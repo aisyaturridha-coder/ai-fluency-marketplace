@@ -14,6 +14,7 @@ re-analysis cadence with no network call and nothing to set up.
   ./driver.py cadence          how often to re-run, derived from your own rate
   ./driver.py cert             self-issued record + reproducibility digest
   ./driver.py report [-o F]    HTML record: cert + transcript + validity window
+  ./driver.py report --pdf     3-page A4 print edition (needs local Chrome)
   ./driver.py update           pull the latest published version
   ./driver.py all              cert + score + practices + cadence
 
@@ -26,6 +27,7 @@ import json
 import math
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 
@@ -34,7 +36,7 @@ ROOT = HERE.parents[2]
 
 # Bumped whenever the shipped files change. `update` compares this against the
 # published VERSION file; nothing else in the tool touches the network.
-VERSION = "1.2.1"
+VERSION = "1.3.0"
 UPDATE_REPO = "aisyaturridha-coder/ai-fluency-marketplace"
 UPDATE_PATH = "plugins/ai-fluency/skills/run-ai-fluency"
 UPDATE_FILES = ("VERSION", "SKILL.md", "driver.py", "extract-evidence.py")
@@ -228,6 +230,27 @@ DIMENSIONS = [
 ]
 
 
+def fmt_value(value) -> str:
+    """The one place a measured value becomes text.
+
+    Every human-readable surface — terminal, HTML, PDF, practices — renders
+    through this, so the record one operator produces is formatted identically
+    to everyone else's. Do NOT format a measured value anywhere else: the moment
+    two surfaces disagree, two people's certificates stop being comparable.
+
+    Whole floats collapse to the integer form so a value that lands on 6.0 for
+    one operator and 6 for another still reads the same. `--json` deliberately
+    keeps the numeric type; it is machine input, not a rendered record.
+    """
+    if isinstance(value, bool):
+        return str(value)
+    if isinstance(value, float):
+        if value == int(value) and abs(value) < 1e15:
+            return str(int(value))
+        return f"{value:.2f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
 def score_pack(pack: dict) -> dict:
     out = {}
     for name, fn, gloss in DIMENSIONS:
@@ -398,7 +421,7 @@ def render_scores(scores: dict) -> None:
         print(f"      {c(data['gloss'], DIM)}")
         for s in data["subs"]:
             mark = c("!", RED) if s["score"] <= 2 else (c("~", YEL) if s["score"] == 3 else " ")
-            print(f"      {mark} {s['label']}: {c(str(s['value']), CYA)}"
+            print(f"      {mark} {s['label']}: {c(fmt_value(s['value']), CYA)}"
                   f" {c(ARROW + ' ' + str(s['score']) + '/5', DIM)}")
         print()
 
@@ -423,7 +446,7 @@ def render_practices(items: list[dict]) -> None:
     print(c("Each names the metric it should move, so the next run can check it.\n", DIM))
     for i, x in enumerate(items, 1):
         print(f"  {c(str(i) + '. ' + x['title'], BOLD)}")
-        print(f"     {c(x['dimension'] + ' - currently ' + str(x['value']) + ' ' + ARROW + ' ' + str(x['sub_score']) + '/5', DIM)}")
+        print(f"     {c(x['dimension'] + ' - currently ' + fmt_value(x['value']) + ' ' + ARROW + ' ' + str(x['sub_score']) + '/5', DIM)}")
         for line in _wrap(x["body"], 72):
             print(f"     {line}")
         print(f"     {c('Target: ' + x['target'], CYA)}\n")
@@ -601,7 +624,7 @@ def build_report(pack: dict, scores: dict, subject: str) -> str:
         for s in data["subs"]:
             rows.append(
                 f'<tr><td class="sig">{_esc(s["label"])}</td>'
-                f'<td class="n">{_esc(s["value"])}</td>'
+                f'<td class="n">{_esc(fmt_value(s["value"]))}</td>'
                 f'<td><span class="g g{s["score"]}">{s["score"]}/5</span></td>'
                 f'<td class="n">{ANCHOR_WORDS[s["score"]]}</td>'
                 f'<td class="why">{_esc(s["why"])}</td></tr>')
@@ -763,6 +786,356 @@ Skill package: <a href="{_esc(SKILL_PACKAGE_URL)}">{_esc(SKILL_PACKAGE_URL)}</a>
 install with <code>/plugin marketplace add {_esc(UPDATE_REPO)}</code> then
 <code>/plugin install {_esc(SKILL_PACKAGE_NAME)}</code>, and score your own.</footer>
 </div></body></html>"""
+
+
+# --- print edition (PDF) ---------------------------------------------------
+# Three A4 pages: a ceremonial face, the transcript, then the notes. Rendered
+# by whatever Chromium-family browser is already on the machine — nothing is
+# downloaded, and the call is an argument list, never a shell string.
+
+ROMAN = {1: "I", 2: "II", 3: "III", 4: "IV", 5: "V"}
+
+CHROME_ON_PATH = ("google-chrome", "google-chrome-stable", "chromium",
+                  "chromium-browser", "microsoft-edge", "brave-browser", "chrome")
+CHROME_PATHS = (
+    "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome",
+    "/Applications/Chromium.app/Contents/MacOS/Chromium",
+    "/Applications/Microsoft Edge.app/Contents/MacOS/Microsoft Edge",
+    "/Applications/Brave Browser.app/Contents/MacOS/Brave Browser",
+    r"C:\Program Files\Google\Chrome\Application\chrome.exe",
+    r"C:\Program Files (x86)\Google\Chrome\Application\chrome.exe",
+)
+
+
+def find_chrome() -> str | None:
+    """A Chromium-family binary able to --print-to-pdf, or None."""
+    for name in CHROME_ON_PATH:
+        found = shutil.which(name)
+        if found:
+            return found
+    for cand in CHROME_PATHS:
+        if pathlib.Path(cand).exists():
+            return cand
+    return None
+
+
+def render_pdf(html_path: pathlib.Path, pdf_path: pathlib.Path,
+               chrome: str) -> subprocess.CompletedProcess:
+    return subprocess.run(
+        [chrome, "--headless", "--disable-gpu", "--no-sandbox",
+         "--no-pdf-header-footer", f"--print-to-pdf={pdf_path}",
+         html_path.as_uri()],
+        capture_output=True, text=True, timeout=180)
+
+
+def build_print_html(pack: dict, scores: dict, subject: str) -> str:
+    cert = certificate(pack, scores)
+    cad = cadence(pack)
+    prac = practices_for(scores, limit=6)
+    win = pack["window"]
+    start = (win.get("first_session") or "")[:10]
+    end = (win.get("last_session") or "")[:10]
+    order = [d for d in cert["profile_order"] if d in scores]
+
+    dims = "".join(
+        f'<div class="dim"><div class="dl">{_esc(d)}</div>'
+        f'<div class="dv">{ROMAN[scores[d]["score"]]}</div>'
+        f'<div class="dn">{scores[d]["score"]} of 5</div></div>'
+        for d in order)
+
+    rows = []
+    for d in order:
+        data = scores[d]
+        rows.append(
+            f'<tr class="grp"><td colspan="4">{_esc(d)}'
+            f'<span class="gr">{data["score"]}/5 · mean {data["raw"]:.2f}</span></td></tr>')
+        for s in data["subs"]:
+            rows.append(
+                f'<tr><td class="sig">{_esc(s["label"])}'
+                f'<span class="why">{_esc(s["why"])}</span></td>'
+                f'<td class="n">{_esc(fmt_value(s["value"]))}</td>'
+                f'<td class="n"><b>{s["score"]}</b>/5</td>'
+                f'<td class="anc">{_esc(ANCHOR_WORDS[s["score"]])}</td></tr>')
+
+    recs = "".join(
+        f'<div class="rec"><h3>{i}. {_esc(p["title"])}</h3>'
+        f'<p class="rm">{_esc(p["dimension"])} · currently {_esc(fmt_value(p["value"]))} '
+        f'&rarr; {p["sub_score"]}/5</p><p>{_esc(p["body"])}</p>'
+        f'<p class="rt">Target: {_esc(p["target"])}</p></div>'
+        for i, p in enumerate(prac, 1)) or "<p>Nothing scored 3 or below.</p>"
+
+    if cad["trend_ready"]:
+        trend = (f'{cad["monthly_points_available"]} monthly data points exist, so a '
+                 "trajectory claim is supportable.")
+    else:
+        trend = (f'Only {cad["monthly_points_available"]} monthly data points exist so far, '
+                 "so this record carries no trajectory claim. Three points are the "
+                 "minimum before direction means anything.")
+
+    cad_rows = "".join(
+        f'<tr><td>{r["detectable_change_pp"]} point move</td>'
+        f'<td class="n">{r["sessions_per_window"]}</td>'
+        f'<td class="n">{r["days_at_current_rate"] or "&mdash;"}</td></tr>'
+        for r in cad["power_table"])
+
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<title>AI Fluency Record — {_esc(subject)}</title><style>
+@page {{ size: A4; margin: 0; }}
+*{{box-sizing:border-box;-webkit-print-color-adjust:exact;print-color-adjust:exact}}
+html,body{{margin:0;padding:0;background:#fff;color:#131A2B;
+font:400 10.5pt/1.55 "Helvetica Neue",Helvetica,Arial,sans-serif}}
+/* bottom padding reserves the strip the absolute .pf footer sits in, so body
+   copy can never run underneath it */
+.page{{width:210mm;height:297mm;padding:16mm 18mm 24mm;position:relative;
+overflow:hidden;page-break-after:always;break-after:page}}
+.page.scrollpg{{padding:16mm 18mm}}
+.page:last-child{{page-break-after:auto;break-after:auto}}
+
+/* ---------- page 1 : the scroll ---------- */
+.scroll{{height:100%;border:1.5pt solid #1F6B63;padding:12mm 14mm;
+display:flex;flex-direction:column;text-align:center;position:relative}}
+.scroll::after{{content:"";position:absolute;inset:3mm;border:.5pt solid #C9B27A;
+pointer-events:none}}
+.crest{{font:400 20pt/1 ui-serif,Georgia,serif;color:#1F6B63;margin-bottom:2mm}}
+.kicker{{font:600 7.5pt/1 "SF Mono",Menlo,monospace;letter-spacing:.28em;
+text-transform:uppercase;color:#1F6B63}}
+h1{{font:400 27pt/1.15 ui-serif,Georgia,"Times New Roman",serif;margin:5mm 0 1mm;
+letter-spacing:.01em}}
+.rule{{width:42mm;height:.8pt;background:#C9B27A;margin:4mm auto}}
+.conf{{font:400 10pt/1.6 ui-serif,Georgia,serif;color:#4A5464;margin:0}}
+.name{{font:400 25pt/1.2 ui-serif,Georgia,serif;margin:4mm 0 2mm;
+border-bottom:.5pt solid #D5DAE1;display:inline-block;padding:0 10mm 2.5mm}}
+.stmt{{font:400 9.5pt/1.65 ui-serif,Georgia,serif;color:#4A5464;
+max-width:120mm;margin:0 auto}}
+.grid{{display:flex;justify-content:center;gap:0;margin:7mm 0 5mm}}
+.dim{{flex:1;padding:0 3mm;border-left:.5pt solid #E7EAEE}}
+.dim:first-child{{border-left:none}}
+.dl{{font:600 6.8pt/1.2 "SF Mono",Menlo,monospace;letter-spacing:.14em;
+text-transform:uppercase;color:#7C8593;margin-bottom:2mm;min-height:7mm}}
+.dv{{font:400 21pt/1 ui-serif,Georgia,serif;color:#131A2B}}
+.dn{{font:400 7pt/1.4 "SF Mono",Menlo,monospace;color:#7C8593;margin-top:1.5mm}}
+.facts{{display:flex;justify-content:center;gap:14mm;margin-bottom:5mm}}
+.fact b{{display:block;font:400 13pt/1.2 ui-serif,Georgia,serif}}
+.fact span{{font:600 6.8pt/1 "SF Mono",Menlo,monospace;letter-spacing:.14em;
+text-transform:uppercase;color:#7C8593}}
+.floor b{{color:#C2571E}}.post b{{color:#1F6B63;font-size:11pt}}
+.spacer{{flex:1}}
+.seal{{border:.75pt solid #1F6B63;background:#F2F7F6;padding:4mm 5mm;margin-bottom:4mm}}
+.seal .kicker{{margin-bottom:2mm}}
+.dg{{font-family:"SF Mono",Menlo,monospace;font-size:7.4pt;line-height:1.7;
+word-break:break-all;color:#131A2B}}
+.warn{{border:.75pt solid #C2571E;background:#FBEDE4;padding:3.5mm 5mm;
+font-size:8pt;line-height:1.5;text-align:left;color:#131A2B}}
+.warn b{{color:#C2571E}}
+.sigs{{display:flex;justify-content:space-between;gap:12mm;margin-top:5mm}}
+.sig-l{{flex:1;border-top:.5pt solid #131A2B;padding-top:2mm;
+font-size:7.5pt;color:#4A5464;text-align:left}}
+
+/* ---------- shared section furniture ---------- */
+h2{{font:400 15pt/1.2 ui-serif,Georgia,serif;margin:0 0 1mm}}
+.sn{{color:#7C8593;font-size:8pt;margin:0 0 3mm;padding-bottom:2mm;
+border-bottom:1pt solid #131A2B}}
+.ph{{display:flex;justify-content:space-between;align-items:baseline;
+border-bottom:.5pt solid #D5DAE1;padding-bottom:2mm;margin-bottom:6mm;
+font:600 7pt/1 "SF Mono",Menlo,monospace;letter-spacing:.18em;
+text-transform:uppercase;color:#7C8593}}
+.pf{{position:absolute;left:20mm;right:20mm;bottom:12mm;
+border-top:.5pt solid #D5DAE1;padding-top:2.5mm;
+font:400 7pt/1.4 "SF Mono",Menlo,monospace;color:#7C8593;
+display:flex;justify-content:space-between}}
+
+/* ---------- page 2 : transcript ---------- */
+table{{border-collapse:collapse;width:100%;font-size:8.3pt}}
+th{{text-align:left;font:600 6.8pt/1 "SF Mono",Menlo,monospace;letter-spacing:.13em;
+text-transform:uppercase;color:#7C8593;border-bottom:.75pt solid #131A2B;
+padding:0 6pt 2mm 0}}
+td{{padding:1.5mm 6pt 1.5mm 0;border-bottom:.4pt solid #E7EAEE;vertical-align:top}}
+td.n{{font-family:"SF Mono",Menlo,monospace;font-variant-numeric:tabular-nums;
+white-space:nowrap;text-align:right;width:20mm}}
+td.anc{{width:26mm;color:#4A5464}}
+tr.grp td{{padding-top:3.4mm;border-bottom:.75pt solid #131A2B;
+font:600 9.6pt/1.3 "Helvetica Neue",Helvetica,sans-serif}}
+.gr{{font-family:"SF Mono",Menlo,monospace;font-weight:400;color:#7C8593;
+font-size:8pt;margin-left:3mm}}
+td.sig{{padding-left:4mm}}
+.why{{display:block;color:#7C8593;font-size:7pt;margin-top:.4mm}}
+.anchors{{margin-top:4mm;font-size:7.8pt;color:#4A5464}}
+
+/* ---------- page 3 : notes ---------- */
+/* Six recommendations stacked full-width overflow A4 once the validity and
+   method blocks are added below them. Two columns halves the height and the
+   whole page fits without shrinking the type into unreadability. */
+.recs{{column-count:2;column-gap:6mm}}
+.rec{{border-left:2pt solid #1F6B63;padding:0 0 0 3.5mm;margin-bottom:2.6mm;
+break-inside:avoid;-webkit-column-break-inside:avoid}}
+.rec h3{{font:600 8.6pt/1.25 "Helvetica Neue",Helvetica,sans-serif;margin:0 0 1mm}}
+.rec p{{margin:0 0 1mm;font-size:7.9pt;line-height:1.45;color:#4A5464}}
+.rm{{font-family:"SF Mono",Menlo,monospace;font-size:7.4pt;color:#7C8593}}
+.rt{{color:#1F6B63;font-family:"SF Mono",Menlo,monospace;font-size:7.6pt}}
+.two{{display:flex;gap:7mm;margin-top:4mm}}
+.two>div{{flex:1}}
+h3.sub{{font:600 8pt/1 "SF Mono",Menlo,monospace;letter-spacing:.14em;
+text-transform:uppercase;color:#1F6B63;margin:0 0 2.5mm}}
+.two p,.two li{{font-size:7.5pt;line-height:1.45;color:#4A5464}}
+ul{{padding-left:4mm;margin:0}}li{{margin-bottom:1.4mm}}
+.two table{{font-size:7.8pt}}.two td,.two th{{padding:1.4mm 4pt 1.4mm 0}}
+.two td.n{{width:14mm}}
+</style></head><body>
+
+<section class="page scrollpg"><div class="scroll">
+  <div class="crest">&#10086;</div>
+  <div class="kicker">Self-issued record &middot; not an accredited credential</div>
+  <h1>Certificate of AI Fluency</h1>
+  <div class="rule"></div>
+  <p class="conf">This is to certify that</p>
+  <div><span class="name">{_esc(subject)}</span></div>
+  <p class="stmt">has had their collaboration with AI agents assessed against
+  Anthropic&rsquo;s <b>4D AI Fluency framework</b> &mdash; Delegation, Description,
+  Discernment and Diligence &mdash; on the evidence of
+  <b>{pack["volume"]["sessions"]} working sessions</b> recorded between
+  {_esc(start)} and {_esc(end)}, and is awarded the profile below.</p>
+
+  <div class="grid">{dims}</div>
+
+  <div class="facts">
+    <div class="fact floor"><span>Floor</span><b>{cert["floor"]}/5</b></div>
+    <div class="fact"><span>Binding constraint</span><b>{_esc(cert["binding_constraint"])}</b></div>
+    <div class="fact post"><span>Safety posture</span><b>{_esc(cert["safety_posture"].title())}</b></div>
+  </div>
+  <p class="stmt">{_esc(cert["no_single_average"])}</p>
+
+  <div class="spacer"></div>
+
+  <div class="seal"><div class="kicker">Verification digest &mdash; SHA-256</div>
+  <div class="dg">{_esc(cert["digest"])}</div></div>
+
+  <p class="warn"><b>What this certifies, and what it does not.</b>
+  Generated by its own subject from their own local session transcripts.
+  <b>No organisation has accredited it, and it confers no qualification.</b>
+  Its only claim to weight is that every figure is reproducible from the
+  archived evidence and the scoring rubric is published. It measures
+  collaboration behaviour, never code quality.</p>
+
+  <div class="sigs">
+    <div class="sig-l">Issued by the subject &middot; {_esc(subject)}</div>
+    <div class="sig-l">Date of issue &middot; {_esc(end)}</div>
+    <div class="sig-l">Reproduce &middot; driver.py cert</div>
+  </div>
+</div></section>
+
+<section class="page">
+  <div class="ph"><span>Transcript of record</span>
+  <span>{_esc(subject)} &middot; digest {_esc(cert["digest_short"])}</span></div>
+  <h2>Transcript of record</h2>
+  <p class="sn">Every sub-signal behind each dimension score, with the measured value
+  and the anchor it maps to. Dimension scores are the rounded mean of their rows &mdash;
+  never a judgement call.</p>
+  <table><thead><tr><th>Signal &amp; what it reads</th><th style="text-align:right">Measured</th>
+  <th style="text-align:right">Grade</th><th>Anchor</th></tr></thead>
+  <tbody>{"".join(rows)}</tbody></table>
+  <p class="anchors"><b>Grade anchors.</b> Assigned by matching a measured value to a
+  fixed band. 5&nbsp;Structural &middot; 4&nbsp;Deliberate &middot; 3&nbsp;Habitual &middot;
+  2&nbsp;Unreliable &middot; 1&nbsp;Occasional.</p>
+  <div class="pf"><span>Page 2 of 3 &middot; transcript</span>
+  <span>{_esc(start)} &rarr; {_esc(end)}</span></div>
+</section>
+
+<section class="page">
+  <div class="ph"><span>Recommendations, validity &amp; method</span>
+  <span>{_esc(subject)} &middot; digest {_esc(cert["digest_short"])}</span></div>
+  <h2>How to raise these scores</h2>
+  <p class="sn">Ranked by weakest signal. Each names the metric it should move, so the
+  next run can check whether it worked.</p>
+  <div class="recs">{recs}</div>
+
+  <div class="two">
+    <div>
+      <h3 class="sub">Validity window</h3>
+      <p>This record covers {cad["sessions_observed"]} sessions across
+      {cad["calendar_days"]} days &mdash; about {cad["sessions_per_day"]} per day.
+      At that rate, a re-assessment becomes informative after roughly
+      {cad["recommended_sessions"]} new sessions, or {cad["recommended_window_days"]} days:
+      that is the smallest window in which a 15-point move clears sampling noise.
+      Re-issuing sooner produces a different digest but no distinguishable change &mdash;
+      the digest moves with every new session, so a changed digest on its own is
+      not evidence that anything improved.</p>
+      <p>{_esc(trend)}</p>
+      <table><thead><tr><th>To detect</th><th style="text-align:right">Sessions</th>
+      <th style="text-align:right">Days</th></tr></thead><tbody>{cad_rows}</tbody></table>
+    </div>
+    <div>
+      <h3 class="sub">Method and limits</h3>
+      <ul>
+      <li><b>Framework.</b> Anthropic&rsquo;s 4D AI Fluency framework, developed with
+      Prof.&nbsp;Joseph Feller (University College Cork) and Prof.&nbsp;Rick Dakan
+      (Ringling College). Scoring against a published external rubric is what
+      separates this from a private opinion.</li>
+      <li><b>Proxies, not measures.</b> Transcripts record behaviour, not intent or
+      correctness. Whether the agent was actually wrong is not visible, so
+      Discernment is only partially observable &mdash; steering latency is a stand-in,
+      not the thing itself.</li>
+      <li><b>Mechanical scoring.</b> Grades come from fixed bands, which makes them
+      reproducible rather than wise. A human reading the same evidence may
+      reasonably differ by a point; where that happens, the sub-signals are the
+      thing to examine.</li>
+      <li><b>Terrain excluded.</b> Commit rates, language breadth, and test habits are
+      software-engineering behaviour that would look near-identical for a skilled
+      developer using no AI. They are not scored here.</li>
+      <li><b>No peer benchmark.</b> There is no population to compare against, so there
+      are no percentiles and no ranking claims.</li>
+      </ul>
+    </div>
+  </div>
+  <div class="pf"><span>Page 3 of 3 &middot; recommendations, validity &amp; method</span>
+  <span>Skill package &middot; github.com/{_esc(UPDATE_REPO)}</span></div>
+</section>
+
+</body></html>"""
+
+
+def cmd_report_pdf(pack: dict, scores: dict, out: pathlib.Path, subject: str) -> int:
+    """Write the print HTML, then render it to PDF with a local browser."""
+    html_out, pdf_out = out.with_suffix(".print.html"), out.with_suffix(".pdf")
+    out.parent.mkdir(parents=True, exist_ok=True)
+    html_out.write_text(build_print_html(pack, scores, subject), encoding="utf-8")
+    try:
+        html_out.chmod(0o600)
+    except OSError:
+        pass
+
+    print(c("\nPRINT EDITION\n", BOLD))
+    chrome = find_chrome()
+    if not chrome:
+        # The document still exists and prints fine by hand — say so rather than
+        # leaving the operator with nothing.
+        print(f"  {c('no Chromium-family browser found', RED)}")
+        print(f"  {c('written', GRN)}  {html_out}")
+        print(f"\n  {c('Open that file and print to PDF (Cmd/Ctrl-P), or install', DIM)}")
+        print(f"  {c('Chrome/Chromium/Edge and re-run with --pdf.', DIM)}\n")
+        return 1
+
+    try:
+        res = render_pdf(html_out, pdf_out, chrome)
+    except subprocess.TimeoutExpired:
+        print(f"  {c('the browser did not finish within 180s', RED)}")
+        print(f"  {c('written', GRN)}  {html_out}  {c('(print it by hand)', DIM)}\n")
+        return 1
+
+    if res.returncode != 0 or not pdf_out.exists():
+        print(f"  {c('render failed', RED)} {c((res.stderr or '').strip()[-200:], DIM)}")
+        print(f"  {c('written', GRN)}  {html_out}  {c('(print it by hand)', DIM)}\n")
+        return 1
+
+    try:
+        pdf_out.chmod(0o600)
+    except OSError:
+        pass
+    print(f"  {c('written', GRN)}  {pdf_out}")
+    print(f"  {c(str(pdf_out.stat().st_size // 1024) + ' KB · 3 A4 pages — scroll, '
+                'transcript, notes', DIM)}")
+    print(f"  {c('renderer', DIM)}  {c(chrome, DIM)}")
+    print(f"\n  {c('Print source kept alongside: ' + html_out.name, DIM)}\n")
+    return 0
 
 
 def cmd_report(pack: dict, scores: dict, out: pathlib.Path, subject: str) -> int:
@@ -968,6 +1341,9 @@ def main() -> int:
                     help="report: name to print on the certificate")
     ap.add_argument("--dry-run", action="store_true",
                     help="update: report what would change without writing")
+    ap.add_argument("--pdf", action="store_true",
+                    help="report: render the 3-page A4 print edition (needs a "
+                         "local Chrome/Chromium/Edge)")
     ap.add_argument("--freeze", action="store_true",
                     help="archive the pack under reports/ so the cert stays verifiable")
     args = ap.parse_args()
@@ -1008,7 +1384,10 @@ def main() -> int:
     if args.command in ("report", "all"):
         out = args.out or (BASE / "reports" /
                            f"ai-fluency-{cert['digest_short']}.html")
-        cmd_report(pack, scores, out, args.subject)
+        if getattr(args, "pdf", False):
+            cmd_report_pdf(pack, scores, out, args.subject)
+        else:
+            cmd_report(pack, scores, out, args.subject)
     if args.command in ("cert", "all"):
         render_cert(cert)
     if args.command in ("score", "all"):

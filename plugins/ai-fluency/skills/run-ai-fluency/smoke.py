@@ -16,10 +16,13 @@ Exit code is 0 only when every selected check passes.
 from __future__ import annotations
 
 import argparse
+import contextlib
 import importlib.util
+import io
 import json
 import os
 import pathlib
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -316,6 +319,93 @@ def t_report():
     return f"{len(html) // 1024} KB, renders offline"
 
 
+@check("every surface formats measured values identically")
+def t_format_consistency():
+    """The record one person shares must be formatted like everyone else's.
+
+    Terminal, HTML and PDF each render the same sub-signals; if any of them
+    formats a number its own way, two operators' certificates stop being
+    comparable. Every path must go through fmt_value.
+    """
+    m = load_driver()
+    pack = make_pack()
+    sc = m.score_pack(pack)
+    html = m.build_report(pack, sc, "tester")
+    pdf = m.build_print_html(pack, sc, "tester")
+
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        m.render_scores(sc)
+        m.render_practices(m.practices_for(sc, limit=6))
+    term = buf.getvalue()
+
+    for dim, data in sc.items():
+        for sub in data["subs"]:
+            shown = m.fmt_value(sub["value"])
+            for surface, doc in (("terminal", term), ("html", html), ("pdf", pdf)):
+                assert shown in doc, (
+                    f"{surface} does not render {sub['label']!r} as {shown!r} "
+                    "— a surface is formatting values on its own")
+
+    # Whole floats must not render as "6.0" for one operator and "6" for another.
+    assert m.fmt_value(6.0) == m.fmt_value(6) == "6", "whole floats drift"
+    assert m.fmt_value(27.4) == "27.4", "current format changed"
+    assert m.fmt_value(99.71) == "99.71", "current format changed"
+    assert m.fmt_value(0.8) == "0.8", "current format changed"
+    return "terminal = html = pdf"
+
+
+@check("print edition is exactly three A4 pages and keeps the disclaimer")
+def t_print_edition():
+    m = load_driver()
+    pack = make_pack()
+    sc = m.score_pack(pack)
+    doc = m.build_print_html(pack, sc, "tester")
+    # Three <section class="page">, no more: a fourth means something overflowed
+    # into a page the layout never accounted for.
+    assert doc.count('class="page') == 3, f'expected 3 pages, got {doc.count(chr(34))}'
+    assert "@page" in doc and "210mm" in doc, "not sized for A4"
+    for section in ("Certificate of AI Fluency", "Transcript of record",
+                    "Validity window", "Method and limits",
+                    "How to raise these scores"):
+        assert section in doc, f"print edition is missing {section!r}"
+    # The scroll layout reads as a credential, so the denial must survive.
+    assert "No organisation has accredited it" in doc, "disclaimer dropped"
+    assert "confers no qualification" in doc, "disclaimer weakened"
+    cert = m.certificate(pack, sc)
+    assert cert["digest"] in doc, "digest not embedded"
+    for dim, data in sc.items():
+        for sub in data["subs"]:
+            assert sub["label"] in doc, f"sub-signal missing: {sub['label']}"
+    return "3 pages, disclaimer intact"
+
+
+@check("pdf rendering shells out safely and degrades without a browser")
+def t_pdf_invocation():
+    m = load_driver()
+    src = pathlib.Path(m.__file__).read_text(encoding="utf-8")
+    assert "shell=True" not in src, "pdf path introduced a shell"
+    # The browser is invoked as an argument list; a str command would let a
+    # path with spaces (or worse) be re-parsed by a shell.
+    i = src.index("def render_pdf")
+    body = src[i:i + 700]
+    assert "[chrome," in body, "browser not invoked as an argument list"
+    assert "--print-to-pdf=" in body, "not actually printing to pdf"
+    # find_chrome must simply return None when nothing is installed, so the
+    # caller can fall back to "print it by hand" instead of raising.
+    real_which, real_exists = shutil.which, pathlib.Path.exists
+    try:
+        shutil.which = lambda *_a, **_k: None
+        pathlib.Path.exists = lambda self: False
+        m.shutil.which = shutil.which
+        assert m.find_chrome() is None, "claimed a browser that is not there"
+    finally:
+        shutil.which = real_which
+        pathlib.Path.exists = real_exists
+        m.shutil.which = real_which
+    return "argument list, graceful fallback"
+
+
 @check("report escapes values instead of injecting them raw")
 def t_report_escaping():
     m = load_driver()
@@ -479,7 +569,8 @@ def t_agent_live():
 
 LOCAL = [t_import, t_extractor_compiles, t_high, t_low, t_bounds, t_degenerate,
          t_schema_guard, t_digest, t_no_average, t_cadence, t_cli, t_json,
-         t_ascii, t_report, t_report_escaping, t_redaction, t_perms, t_update_paths, t_no_injection, t_utf8]
+         t_ascii, t_report, t_format_consistency, t_print_edition, t_pdf_invocation, t_report_escaping,
+         t_redaction, t_perms, t_update_paths, t_no_injection, t_utf8]
 ONLINE = [t_online_version, t_online_consistency]
 AGENT = [t_agent_config, t_agent_rubric, t_agent_readonly]
 LIVE = [t_agent_live]

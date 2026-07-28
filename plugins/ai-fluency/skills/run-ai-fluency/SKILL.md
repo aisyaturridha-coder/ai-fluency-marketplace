@@ -228,7 +228,7 @@ next run can check whether it worked:
 ### What `report` gives you — the shareable document
 
 Terminal output is fine for the operator, but useless to send anyone. `report`
-writes **one self-contained HTML file** carrying all four deliverables:
+writes **one self-contained HTML file**:
 
 ```bash
 ./.claude/skills/run-ai-fluency/driver.py report --subject "Your Name"
@@ -237,15 +237,71 @@ writes **one self-contained HTML file** carrying all four deliverables:
 
 Inside it: the **certificate** (profile, floor, safety posture, verification
 digest), the **transcript** (every sub-signal with its measured value, grade and
-anchor), **how to raise each score**, and **how often to re-evaluate** with the
-power table behind that recommendation.
+anchor), the **validity window**, and **method and limits**. The wording matches
+the certificate already circulated to the team, so an old and a new record read
+identically.
 
-No assets, no network, no CDN — one file that opens in any browser and survives
-being emailed. Written `0600` like the rest of the operator's data. `all`
-produces it too.
+**Ranked advice is deliberately not in this document** — it lives in
+`driver.py practices`. Report it separately when handing over a run.
+
+The footer carries the skill-package URL and the two install lines, so anyone
+holding the file can install the skill and score their own. That link is the
+only outbound reference; nothing is loaded over the network to render the page.
+Written `0600` like the rest of the operator's data. `all` produces it too.
 
 Reach for this whenever someone asks for their scores "as a report", "as a
 certificate", "as a document", or wants something to share.
+
+### What `report --pdf` gives you — the print edition
+
+Three A4 pages, for printing or attaching where an HTML file would be awkward:
+
+```bash
+./.claude/skills/run-ai-fluency/driver.py report --pdf --subject "Your Name"
+```
+
+| Page | |
+|---|---|
+| 1 | Ceremonial face — bordered scroll, the four dimensions in Roman numerals, floor, binding constraint, safety posture, digest seal, signature lines |
+| 2 | Transcript — every sub-signal, measured value, grade, anchor |
+| 3 | The six ranked recommendations in two columns, then validity window and method side by side |
+
+Rendered by whatever **Chrome, Chromium, Edge or Brave** is already installed —
+nothing is downloaded, and the browser is invoked as an argument list, never a
+shell string. The print source is kept beside the PDF as `*.print.html`.
+
+**With no such browser installed** the command writes the print HTML anyway,
+tells the operator to print it by hand (Cmd/Ctrl-P → Save as PDF), and exits
+non-zero — it does not pretend to have produced a PDF.
+
+The scroll layout reads much more like a real credential than the HTML does, so
+the "**no organisation has accredited it, and it confers no qualification**"
+notice sits on page 1 above the signature line, and the header repeats it. A
+smoke test asserts both strings survive; do not quietly soften them.
+
+The six recommendations sit in **two columns** on page 3 for a reason: stacked
+full-width they push the validity and method blocks off the bottom of A4. If you
+add content to that page, re-render and look at page 3 — a page-count check will
+not catch an overflow, because the excess is clipped rather than reflowed.
+
+### Output format is fixed, for everyone
+
+Two people's records are only comparable if they are formatted the same way.
+So a measured value becomes text in exactly **one** place — `fmt_value()` in
+`driver.py` — and the terminal, HTML and PDF all render through it. Whole
+floats collapse to the integer form, so a metric landing on `6.0` for one
+operator and `6` for another still reads `6` on both records.
+
+`--json` is the deliberate exception: it keeps the numeric type, because it is
+machine input rather than a rendered record.
+
+**Do not format a measured value anywhere else, and do not "improve" the
+formatting of one surface.** A smoke test renders the same pack to terminal,
+HTML and PDF and asserts every value string appears in all three; it also pins
+the current forms (`27.4`, `99.71`, `0.8`) so a well-meaning change to rounding
+or units cannot silently make one person's certificate incomparable with
+everyone else's. If the format genuinely must change, change `fmt_value`, let
+the test fail, and update it deliberately — that is the intended chokepoint.
 
 ### What `cert` gives you
 

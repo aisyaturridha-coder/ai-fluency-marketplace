@@ -288,14 +288,17 @@ def t_ascii():
     return "no UnicodeEncodeError"
 
 
-@check("HTML report carries all four deliverables and matches the scores")
+@check("HTML report matches the circulated certificate and carries the scores")
 def t_report():
     m = load_driver()
     pack = make_pack()
     sc = m.score_pack(pack)
     html = m.build_report(pack, sc, "tester")
+    # The record deliberately mirrors the certificate already circulated to the
+    # team: cert, transcript, validity window, method. Ranked advice is a
+    # separate deliverable — `driver.py practices`, not this document.
     for section in ("Certificate of AI Fluency", "Transcript of record",
-                    "How to raise these scores", "How often to re-evaluate"):
+                    "Validity window", "Method and limits"):
         assert section in html, f"report is missing the {section!r} section"
     cert = m.certificate(pack, sc)
     assert cert["digest"] in html, "digest not embedded"
@@ -304,8 +307,13 @@ def t_report():
         for sub in data["subs"]:
             assert sub["label"] in html, f"sub-signal missing: {sub['label']}"
     assert html.count("<div") == html.count("</div>"), "unbalanced divs"
-    assert "http://" not in html, "report reaches out to the network"
-    return f"{len(html) // 1024} KB, self-contained"
+    # A teammate holding the file must be able to install the skill and score
+    # their own — that link is the one and only outbound reference allowed.
+    assert m.SKILL_PACKAGE_URL in html, "skill-package link missing"
+    for load in ('src="http', '@import', '<link rel="stylesheet"'):
+        assert load not in html, f"report loads a remote asset: {load}"
+    assert html.count('href="http') == 1, "unexpected outbound link"
+    return f"{len(html) // 1024} KB, renders offline"
 
 
 @check("report escapes values instead of injecting them raw")

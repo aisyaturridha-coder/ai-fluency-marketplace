@@ -13,7 +13,7 @@ re-analysis cadence with no network call and nothing to set up.
   ./driver.py practices        ranked actions, each tied to the score it moves
   ./driver.py cadence          how often to re-run, derived from your own rate
   ./driver.py cert             self-issued record + reproducibility digest
-  ./driver.py report [-o F]    self-contained HTML: cert + transcript + advice
+  ./driver.py report [-o F]    HTML record: cert + transcript + validity window
   ./driver.py update           pull the latest published version
   ./driver.py all              cert + score + practices + cadence
 
@@ -34,10 +34,16 @@ ROOT = HERE.parents[2]
 
 # Bumped whenever the shipped files change. `update` compares this against the
 # published VERSION file; nothing else in the tool touches the network.
-VERSION = "1.2.0"
+VERSION = "1.2.1"
 UPDATE_REPO = "aisyaturridha-coder/ai-fluency-marketplace"
 UPDATE_PATH = "plugins/ai-fluency/skills/run-ai-fluency"
 UPDATE_FILES = ("VERSION", "SKILL.md", "driver.py", "extract-evidence.py")
+
+# Printed on the certificate so a teammate holding the file can install the
+# skill and reproduce their own. Derived from UPDATE_REPO so the two cannot
+# drift apart.
+SKILL_PACKAGE_URL = f"https://github.com/{UPDATE_REPO}"
+SKILL_PACKAGE_NAME = "ai-fluency@aisya-skills"
 
 
 def _raw_base(ref: str) -> str:
@@ -583,7 +589,6 @@ def _esc(s) -> str:
 def build_report(pack: dict, scores: dict, subject: str) -> str:
     cert = certificate(pack, scores)
     cad = cadence(pack)
-    prac = practices_for(scores, limit=6)
     win = pack["window"]
     order = [d for d in cert["profile_order"] if d in scores]
 
@@ -601,24 +606,16 @@ def build_report(pack: dict, scores: dict, subject: str) -> str:
                 f'<td class="n">{ANCHOR_WORDS[s["score"]]}</td>'
                 f'<td class="why">{_esc(s["why"])}</td></tr>')
 
-    prac_html = "".join(
-        f'<div class="rec"><h3>{i}. {_esc(p["title"])}</h3>'
-        f'<p class="meta">{_esc(p["dimension"])} · currently '
-        f'{_esc(p["value"])} → {p["sub_score"]}/5</p>'
-        f'<p>{_esc(p["body"])}</p>'
-        f'<p class="target">Target: {_esc(p["target"])}</p></div>'
-        for i, p in enumerate(prac, 1)) or \
-        '<p class="plain">Nothing scored 3 or below — re-check after the next window.</p>'
-
-    cad_rows = "".join(
-        f'<tr><td>{r["detectable_change_pp"]} point move</td>'
-        f'<td class="n">{r["sessions_per_window"]}</td>'
-        f'<td class="n">{r["days_at_current_rate"] or "—"}</td></tr>'
-        for r in cad["power_table"])
-
-    trend = ("Trajectory is readable." if cad["trend_ready"] else
-             f'Only {cad["monthly_points_available"]} monthly point(s) so far — '
-             "three are needed before any trend claim holds.")
+    # Wording lifted verbatim from the certificate already circulated to the
+    # team, so an old and a new record read identically.
+    if cad["trend_ready"]:
+        trend = (f'{cad["monthly_points_available"]} monthly data points exist, so a '
+                 "trajectory claim is supportable. Direction should still be read "
+                 "from the sub-signals, not the digest.")
+    else:
+        trend = (f'Only {cad["monthly_points_available"]} monthly data points exist so far, '
+                 "so this record carries no trajectory claim. Three points are the "
+                 "minimum before direction means anything.")
 
     return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
 <meta name="viewport" content="width=device-width,initial-scale=1">
@@ -725,39 +722,46 @@ anchor it maps to. Dimension scores are the rounded mean of their rows.</p>
 5 Structural · 4 Deliberate · 3 Habitual · 2 Unreliable · 1 Occasional.</p>
 </section>
 
-<section><h2>How to raise these scores</h2>
-<p class="sn">Ranked by weakest signal. Each names the metric it should move, so the next
-run can check whether it worked.</p>
-{prac_html}</section>
-
-<section><h2>How often to re-evaluate</h2>
-<p class="sn">Derived from your own session rate, not a rule of thumb.</p>
-<p class="plain">Observed {cad["sessions_observed"]} sessions over {cad["calendar_days"]} days
-= <span class="mono">{cad["sessions_per_day"]}</span> per day. A re-run only tells you
-something if a real change would clear sampling noise.</p>
-<div class="scroll"><table><thead><tr><th>To detect</th><th>Sessions needed</th>
-<th>Days at your rate</th></tr></thead><tbody>{cad_rows}</tbody></table></div>
-<p class="plain"><strong>Recommended: re-run about every
-{cad["recommended_window_days"]} days</strong> ({cad["recommended_sessions"]} sessions) —
-the smallest window in which a 15-point move is distinguishable from chance. {trend}</p>
+<section><h2>Validity window</h2>
+<p class="plain">This record covers {cad["sessions_observed"]} sessions across
+{cad["calendar_days"]} days — about <span class="mono">{cad["sessions_per_day"]}</span> per day.
+At that rate, a re-assessment becomes informative after roughly
+{cad["recommended_sessions"]} new sessions, or {cad["recommended_window_days"]} days:
+that is the smallest window in which a 15-point move clears sampling noise.
+Re-issuing sooner produces a different digest but no distinguishable change —
+the digest moves with every new session, so a changed digest on its own is
+not evidence that anything improved.</p>
+<p class="plain">{trend}</p>
 </section>
 
-<section><h2>Method and limits</h2><p class="sn">Read before quoting any number above.</p>
+<section><h2>Method and limits</h2>
 <ul>
 <li><strong>Framework.</strong> Anthropic's 4D AI Fluency framework, developed with
-Prof. Joseph Feller (University College Cork) and Prof. Rick Dakan (Ringling College).</li>
-<li><strong>Proxies, not measures.</strong> Transcripts record behaviour, not intent or
-correctness. Whether the agent was actually wrong is not visible.</li>
-<li><strong>Thresholds are uncalibrated.</strong> The framework is published; the numeric
-bands are a judgement call with no population data behind them.</li>
-<li><strong>Scores move with the window.</strong> A short window can shift a dimension by a
-full point. Treat any single run as approximate.</li>
-<li><strong>No peer benchmark.</strong> No population to compare against — no percentiles,
-no ranking.</li>
+Prof. Joseph Feller (University College Cork) and Prof. Rick Dakan (Ringling
+College). Scoring against a published external rubric is what separates this
+from a private opinion.</li>
+<li><strong>Proxies, not measures.</strong> Transcripts record behaviour, not intent
+or correctness. Whether the agent was actually wrong is not visible, so
+Discernment is only partially observable — steering latency is a stand-in, not
+the thing itself.</li>
+<li><strong>Mechanical scoring.</strong> Grades come from fixed bands, which makes
+them reproducible rather than wise. A human reading the same evidence may
+reasonably differ by a point; where that happens, the sub-signals are the
+thing to examine.</li>
+<li><strong>Terrain excluded.</strong> Commit rates, language breadth, and test
+habits are software-engineering behaviour that would look near-identical for a
+skilled developer using no AI. They are not scored here.</li>
+<li><strong>No peer benchmark.</strong> There is no population to compare against,
+so there are no percentiles and no ranking claims.</li>
 </ul></section>
 
-<footer>Self-issued · Anthropic 4D framework · skill v{_esc(installed_version())} ·
-digest {_esc(cert["digest_short"])}. Not an accredited credential.</footer>
+<footer>Self-issued AI fluency record · Anthropic 4D framework · skill
+v{_esc(installed_version())} · generated from {pack["volume"]["sessions"]} local sessions ·
+digest {_esc(cert["digest_short"])}. Not an accredited credential. Reproduce with
+<code>driver.py cert</code>.<br>
+Skill package: <a href="{_esc(SKILL_PACKAGE_URL)}">{_esc(SKILL_PACKAGE_URL)}</a> —
+install with <code>/plugin marketplace add {_esc(UPDATE_REPO)}</code> then
+<code>/plugin install {_esc(SKILL_PACKAGE_NAME)}</code>, and score your own.</footer>
 </div></body></html>"""
 
 
@@ -772,9 +776,10 @@ def cmd_report(pack: dict, scores: dict, out: pathlib.Path, subject: str) -> int
     print(c("\nREPORT\n", BOLD))
     print(f"  {c('written', GRN)}  {out}")
     print(f"  {c(str(len(html) // 1024) + ' KB · certificate, transcript, '
-                'recommendations, cadence', DIM)}")
-    print(f"\n  {c('Open it in a browser. It is one self-contained file — no '
-                  'assets, no network.', DIM)}\n")
+                'validity window, method', DIM)}")
+    print(f"\n  {c('Open it in a browser. Renders offline — the only external '
+                  'reference is the skill-package link.', DIM)}")
+    print(f"  {c('Ranked advice lives in `driver.py practices`.', DIM)}\n")
     return 0
 
 

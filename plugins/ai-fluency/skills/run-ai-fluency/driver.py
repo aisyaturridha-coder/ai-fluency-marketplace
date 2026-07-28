@@ -69,6 +69,27 @@ DEFAULT_PACK = BASE / "evidence.json"
 BOLD, DIM, RESET = "\033[1m", "\033[2m", "\033[0m"
 RED, YEL, GRN, CYA = "\033[31m", "\033[33m", "\033[32m", "\033[36m"
 
+# A legacy Windows console runs a non-UTF-8 code page, so printing the block and
+# arrow glyphs raises UnicodeEncodeError and kills the run. Ask for UTF-8 first;
+# if the console still cannot represent them, fall back to ASCII rather than crash.
+try:
+    sys.stdout.reconfigure(encoding="utf-8", errors="replace")
+except Exception:
+    pass
+
+
+def _printable(sample: str) -> bool:
+    try:
+        sample.encode(sys.stdout.encoding or "ascii")
+        return True
+    except Exception:
+        return False
+
+
+UNICODE_OK = _printable("█·→—")
+FILLED, EMPTY = ("█", "·") if UNICODE_OK else ("#", ".")
+ARROW = "→" if UNICODE_OK else "->"
+
 
 def c(s: str, colour: str) -> str:
     return s if os.environ.get("NO_COLOR") else f"{colour}{s}{RESET}"
@@ -339,7 +360,7 @@ def cadence(pack: dict) -> dict:
 # --- rendering -------------------------------------------------------------
 
 def bar(score: int) -> str:
-    filled = "█" * score + "·" * (5 - score)
+    filled = FILLED * score + EMPTY * (5 - score)
     colour = RED if score <= 2 else (YEL if score == 3 else GRN)
     return c(filled, colour)
 
@@ -354,7 +375,7 @@ def render_scores(scores: dict) -> None:
         for s in data["subs"]:
             mark = c("!", RED) if s["score"] <= 2 else (c("~", YEL) if s["score"] == 3 else " ")
             print(f"      {mark} {s['label']}: {c(str(s['value']), CYA)}"
-                  f" {c('→ ' + str(s['score']) + '/5', DIM)}")
+                  f" {c(ARROW + ' ' + str(s['score']) + '/5', DIM)}")
         print()
 
     weakest = min(scores.items(), key=lambda kv: kv[1]["raw"])
@@ -378,7 +399,7 @@ def render_practices(items: list[dict]) -> None:
     print(c("Each names the metric it should move, so the next run can check it.\n", DIM))
     for i, x in enumerate(items, 1):
         print(f"  {c(str(i) + '. ' + x['title'], BOLD)}")
-        print(f"     {c(x['dimension'] + ' · currently ' + str(x['value']) + ' → ' + str(x['sub_score']) + '/5', DIM)}")
+        print(f"     {c(x['dimension'] + ' - currently ' + str(x['value']) + ' ' + ARROW + ' ' + str(x['sub_score']) + '/5', DIM)}")
         for line in _wrap(x["body"], 72):
             print(f"     {line}")
         print(f"     {c('Target: ' + x['target'], CYA)}\n")
@@ -519,7 +540,7 @@ def _wrap(text: str, width: int) -> list[str]:
 def load_pack(path: pathlib.Path) -> dict:
     if not path.exists():
         sys.exit(f"no evidence pack at {path}\nRun:  ./driver.py extract")
-    pack = json.loads(path.read_text())
+    pack = json.loads(path.read_text(encoding="utf-8"))
     schema = pack.get("schema", "")
     if not schema.startswith("claude-code-skill-evidence/"):
         sys.exit(f"{path} is not an evidence pack (schema={schema!r})")
@@ -606,7 +627,7 @@ def main() -> int:
     if args.freeze:
         dest = BASE / "reports" / f"cert-{cert['digest_short']}.json"
         dest.parent.mkdir(parents=True, exist_ok=True)
-        dest.write_text(args.pack.read_text(), encoding="utf-8")
+        dest.write_text(args.pack.read_text(encoding="utf-8"), encoding="utf-8")
         cert["frozen_to"] = str(dest.relative_to(BASE))
 
     if args.json:

@@ -64,6 +64,24 @@ readable from this tool, and no scores are baked into it. The bundled
 `.gitignore` keeps each person's `evidence.json` and `reports/` out of any
 repo it lands in.
 
+## Windows
+
+Everything is stdlib Python and `pathlib`, so it runs — with three differences
+worth knowing:
+
+- **The command is `python`, not `python3`.** Substitute it in every example
+  below, or use `py`.
+- **Transcripts are read as UTF-8 explicitly.** Windows would otherwise fall
+  back to the ANSI code page and silently mangle every non-ASCII prompt. Do not
+  remove the `encoding="utf-8"` arguments.
+- **Legacy consoles get ASCII bars.** The driver asks for UTF-8 output first;
+  where the console cannot take it, the score bars degrade from `██···` to
+  `##...` rather than raising `UnicodeEncodeError`. Windows Terminal shows the
+  block glyphs normally.
+
+Verified on macOS. The Windows-specific paths above are covered by simulating a
+cp1252 console; they have not been exercised on a real Windows machine.
+
 ## Prerequisites
 
 Nothing to install. Python 3.9+ (stdlib only) and the transcripts themselves.

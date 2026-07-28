@@ -291,7 +291,9 @@ def text_of(content) -> str:
 
 
 def scan_file(path: pathlib.Path, cutoff, sessions: dict) -> None:
-    with path.open("r", errors="replace") as fh:
+    # Transcripts are UTF-8. Without the explicit encoding, Windows falls back
+    # to the ANSI code page (cp1252) and silently mangles every non-ASCII prompt.
+    with path.open("r", encoding="utf-8", errors="replace") as fh:
         for line in fh:
             line = line.strip()
             if not line:

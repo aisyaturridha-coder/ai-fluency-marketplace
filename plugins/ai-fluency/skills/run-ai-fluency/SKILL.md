@@ -1,6 +1,6 @@
 ---
 name: run-ai-fluency
-description: Run the AI fluency analysis — score your own AI collaboration skill against Anthropic's 4D framework from local Claude Code transcripts. Use for "run the fluency analysis", "score my AI skill", "how good am I at using AI", "what should I improve", "how often should I re-analyse", "analyse my sessions", "/run-ai-fluency". Scores locally with no API call or billing.
+description: Run the AI fluency analysis — score your own AI collaboration skill against Anthropic's 4D framework from local Claude Code transcripts. Use for "run the fluency analysis", "score my AI skill", "how good am I at using AI", "what should I improve", "how often should I re-analyse", "analyse my sessions", "update the fluency skill", "am I on the latest version", "/run-ai-fluency". Scores locally with no API call or billing; only the update command uses the network.
 ---
 
 # Run the AI fluency analysis
@@ -104,6 +104,28 @@ Verified output on a working setup:
 Only the three `PASS` rows gate anything. The `INFO` rows describe the optional
 paid API path — a share-bundle ships without it deliberately, and everything in
 this skill works regardless.
+
+## Keeping it up to date
+
+When the operator asks to **update the skill**, **check for a new version**, or
+says anything like "am I on the latest" — run:
+
+```bash
+./.claude/skills/run-ai-fluency/driver.py update
+```
+
+It compares the installed `VERSION` against the published one, downloads the
+files, **validates them before overwriting anything** (non-empty, and Python
+files must compile), then swaps them atomically. A failed or truncated download
+leaves the existing install untouched — which matters, because the file being
+replaced is the one doing the replacing.
+
+`--dry-run` reports what would change without writing. Tell the operator to
+restart Claude Code afterwards so the new version loads.
+
+**This is the only command that touches the network.** Everything else is
+strictly local, and the tool should stay that way — do not add a background
+version check to `check` or `score`.
 
 ## Run (agent path)
 

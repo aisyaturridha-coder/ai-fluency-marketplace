@@ -13,6 +13,7 @@ re-analysis cadence with no network call and nothing to set up.
   ./driver.py practices        ranked actions, each tied to the score it moves
   ./driver.py cadence          how often to re-run, derived from your own rate
   ./driver.py cert             self-issued record + reproducibility digest
+  ./driver.py update           pull the latest published version
   ./driver.py all              cert + score + practices + cadence
 
 Run from the unit root (where extract-evidence.py lives), or pass --pack.
@@ -29,6 +30,13 @@ import sys
 
 HERE = pathlib.Path(__file__).resolve().parent
 ROOT = HERE.parents[2]
+
+# Bumped whenever the shipped files change. `update` compares this against the
+# published VERSION file; nothing else in the tool touches the network.
+VERSION = "1.1.0"
+UPDATE_BASE = ("https://raw.githubusercontent.com/aisyaturridha-coder/"
+               "ai-fluency-marketplace/main/plugins/ai-fluency/skills/run-ai-fluency")
+UPDATE_FILES = ("VERSION", "SKILL.md", "driver.py", "extract-evidence.py")
 
 
 def find_extractor() -> pathlib.Path | None:
@@ -550,6 +558,104 @@ def load_pack(path: pathlib.Path) -> dict:
     return pack
 
 
+def installed_version() -> str:
+    f = HERE / "VERSION"
+    if f.exists():
+        return f.read_text(encoding="utf-8").strip()
+    return VERSION
+
+
+def _fetch(name: str) -> bytes:
+    """Fetch one published file, tolerating a broken Python CA bundle.
+
+    A Python installed from python.org ships without CA certificates until
+    `Install Certificates.command` is run, so urllib raises
+    CERTIFICATE_VERIFY_FAILED on a perfectly good connection. curl carries the
+    system trust store and is present on macOS and Windows 10+, so it is the
+    fallback rather than disabling verification — which would defeat the point.
+    """
+    url = f"{UPDATE_BASE}/{name}"
+    try:
+        import urllib.request
+        req = urllib.request.Request(url, headers={"User-Agent": "ai-fluency-update"})
+        with urllib.request.urlopen(req, timeout=20) as r:
+            return r.read()
+    except Exception as first:
+        try:
+            out = subprocess.run(["curl", "-fsSL", "--max-time", "20", url],
+                                 capture_output=True, check=True)
+            return out.stdout
+        except subprocess.CalledProcessError as second:
+            # curl reached the network but the server said no — a 404 here means
+            # the published copy is missing that file, not that we are offline.
+            raise RuntimeError(
+                f"{url} could not be fetched (curl exit {second.returncode}); "
+                f"direct fetch also failed: {first}") from None
+        except Exception:
+            raise first
+
+
+def cmd_update(dry_run: bool) -> int:
+    """Replace the installed files with the published ones.
+
+    Downloads are staged and validated before anything is overwritten — a
+    truncated or corrupted fetch must never leave a half-broken install behind,
+    because the thing being replaced is the tool doing the replacing.
+    """
+    local = installed_version()
+    print(c("\nUPDATE\n", BOLD))
+    print(f"  installed  {c(local, CYA)}")
+
+    try:
+        remote = _fetch("VERSION").decode().strip()
+    except Exception as e:
+        print(f"  {c('could not reach the update server', RED)}")
+        print(f"  {c(str(e), DIM)}")
+        print(f"\n  {c('Nothing was changed. Check your connection and retry.', DIM)}")
+        return 1
+
+    print(f"  published  {c(remote, CYA)}\n")
+    if remote == local:
+        print(f"  {c('Already up to date.', GRN)}\n")
+        return 0
+
+    staged: dict[str, bytes] = {}
+    for name in UPDATE_FILES:
+        try:
+            staged[name] = _fetch(name)
+        except Exception as e:
+            print(f"  {c('failed to download ' + name, RED)} {c(str(e), DIM)}")
+            print(f"\n  {c('Nothing was changed.', DIM)}")
+            return 1
+
+    # Validate before touching anything on disk.
+    for name, data in staged.items():
+        if not data.strip():
+            print(f"  {c(name + ' came back empty — aborting', RED)}\n")
+            return 1
+        if name.endswith(".py"):
+            try:
+                compile(data.decode("utf-8"), name, "exec")
+            except SyntaxError as e:
+                print(f"  {c(name + ' failed to parse — aborting', RED)} {c(str(e), DIM)}\n")
+                return 1
+
+    if dry_run:
+        print(f"  {c('--dry-run: ' + str(len(staged)) + ' files would be replaced', YEL)}\n")
+        return 0
+
+    for name, data in staged.items():
+        target = HERE / name
+        tmp = target.with_suffix(target.suffix + ".new")
+        tmp.write_bytes(data)
+        tmp.replace(target)          # atomic swap; the running file keeps its inode
+        print(f"  {c('updated', GRN)}  {name}")
+
+    print(f"\n  {c(local + ' ' + ARROW + ' ' + remote, BOLD)}")
+    print(f"  {c('Restart Claude Code so the new version loads.', DIM)}\n")
+    return 0
+
+
 def cmd_check() -> int:
     ok = True
     print(c("PREFLIGHT\n", BOLD))
@@ -559,6 +665,7 @@ def cmd_check() -> int:
         ok = ok and good
         print(f"  {c('PASS', GRN) if good else c('FAIL', RED)}  {label:<28}{c(detail, DIM)}")
 
+    print(f"  {c('INFO', CYA)}  {'skill version':<28}{c(installed_version(), DIM)}")
     row("python3", sys.version_info >= (3, 9), sys.version.split()[0])
     ex = find_extractor()
     row("extract-evidence.py", ex is not None,
@@ -602,15 +709,19 @@ def main() -> int:
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("command",
                     choices=["check", "extract", "score", "practices", "cadence",
-                             "cert", "all"])
+                             "cert", "update", "all"])
     ap.add_argument("--pack", type=pathlib.Path, default=DEFAULT_PACK)
     ap.add_argument("--days", type=int, default=0)
     ap.add_argument("--no-samples", action="store_true")
     ap.add_argument("--json", action="store_true", help="machine-readable output")
+    ap.add_argument("--dry-run", action="store_true",
+                    help="update: report what would change without writing")
     ap.add_argument("--freeze", action="store_true",
                     help="archive the pack under reports/ so the cert stays verifiable")
     args = ap.parse_args()
 
+    if args.command == "update":
+        return cmd_update(args.dry_run)
     if args.command == "check":
         return cmd_check()
     if args.command == "extract":

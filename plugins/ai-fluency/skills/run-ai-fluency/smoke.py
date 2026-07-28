@@ -368,10 +368,10 @@ def t_utf8():
 @check("published VERSION is reachable")
 def t_online_version():
     m = load_driver()
-    import time
-    v = m._fetch("VERSION", bust=str(int(time.time()))).decode().strip()
+    sha = m._resolve_head()
+    v = m._fetch("VERSION", bust=sha).decode().strip()
     assert v, "VERSION came back empty"
-    return v
+    return f"{v} @ {sha[:10]}"
 
 
 @check("published files match the published VERSION (no stale CDN cache)")
@@ -380,13 +380,13 @@ def t_online_consistency():
     files independently, so a fresh VERSION can arrive with stale code — an
     install that reports the new number while running the old logic."""
     m = load_driver()
-    import time
-    remote = m._fetch("VERSION", bust=str(int(time.time()))).decode().strip()
-    drv = m._fetch("driver.py", bust=remote).decode("utf-8")
+    sha = m._resolve_head()          # one immutable commit for the whole set
+    remote = m._fetch("VERSION", bust=sha).decode().strip()
+    drv = m._fetch("driver.py", bust=sha).decode("utf-8")
     assert f'VERSION = "{remote}"' in drv, (
         f"published driver.py does not declare VERSION {remote} — "
         "the CDN served a mismatched set")
-    return f"driver.py agrees it is {remote}"
+    return f"driver.py agrees it is {remote} @ {sha[:10]}"
 
 
 # --- agent config (opt-in, still free) -------------------------------------

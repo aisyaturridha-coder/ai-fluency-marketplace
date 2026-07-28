@@ -288,6 +288,73 @@ def t_ascii():
     return "no UnicodeEncodeError"
 
 
+@check("redaction covers the credential formats people actually paste")
+def t_redaction():
+    ex = load_driver().find_extractor()
+    spec = importlib.util.spec_from_file_location("ev", ex)
+    ev = importlib.util.module_from_spec(spec); spec.loader.exec_module(ev)
+    # Fixtures are assembled at runtime. Committing literal key-shaped strings
+    # trips secret scanners (GitHub push protection blocks it) and teaches the
+    # wrong habit, so each prefix is joined to its body here instead.
+    j = "".join
+    cases = {
+        "anthropic":       j(["sk-", "ant-", "api03-AbCdEfGh1234567890xyz"]),
+        "openai":          j(["sk-", "proj-", "AbCdEf1234567890GhIjKlMnOp"]),
+        "github":          j(["github", "_pat_", "11ABCDEFG0aBcDeFgHiJkL"]),
+        "aws key id":      j(["AKIA", "IOSFODNN7EXAMPLE"]),
+        "aws secret":      j(["aws_secret", "_access_key", "=wJalrXUtnFEMI/K7MDENG"]),
+        "stripe":          j(["sk", "_live_", "51AbCdEfGhIjKlMnOpQrStUv"]),
+        "slack":           j(["xox", "b-", "123456789012-1234567890123-AbCdEfGhIj"]),
+        "google":          j(["AIza", "SyD-1234567890abcdefghijklmnop"]),
+        "private key":     j(["-----BEGIN ", "RSA PRIVATE", " KEY-----"]),
+        "jwt":             j(["eyJhbGciOiJIUzI1NiJ9.", "eyJzdWIiOiIxIn0.", "abc123"]),
+        "email":           j(["someone", "@", "company.com"]),
+        "password assign": j(['password: "', 'hunter2horse"']),
+    }
+    missed = [n for n, v in cases.items() if ev.redact(v) == v]
+    assert not missed, f"redaction missed: {', '.join(missed)}"
+    for prose in ("fix the login bug in auth.ts", "run npm test then commit"):
+        assert ev.redact(prose) == prose, f"redaction mangled ordinary prose: {prose}"
+    return f"{len(cases)} formats caught, prose untouched"
+
+
+@check("the pack is written private, not world-readable")
+def t_perms():
+    import stat
+    ex = load_driver().find_extractor()
+    out = pathlib.Path(tempfile.mkdtemp()) / "evidence.json"
+    subprocess.run([sys.executable, str(ex), "--days", "1", "-o", str(out)],
+                   capture_output=True)
+    if not out.exists():
+        return "skipped — no transcripts on this machine"
+    mode = out.stat().st_mode
+    assert not (mode & stat.S_IROTH), "pack is world-readable"
+    assert not (mode & stat.S_IRGRP), "pack is group-readable"
+    return oct(stat.S_IMODE(mode))
+
+
+@check("update cannot be told to write arbitrary paths")
+def t_update_paths():
+    m = load_driver()
+    for name in m.UPDATE_FILES:
+        assert "/" not in name and ".." not in name, f"unsafe entry: {name}"
+    src = (HERE / "driver.py").read_text(encoding="utf-8")
+    assert "HERE / name" in src, "update writes somewhere other than the skill dir"
+    return f"{len(m.UPDATE_FILES)} fixed filenames, no traversal"
+
+
+@check("no shell=True, eval, or exec of remote data")
+def t_no_injection():
+    for f in ("driver.py", "extract-evidence.py"):
+        path = HERE / f
+        if not path.exists():
+            path = UNIT / f
+        src = path.read_text(encoding="utf-8")
+        assert "shell=True" not in src, f"{f} uses shell=True"
+        assert "pickle" not in src, f"{f} imports pickle"
+    return "clean"
+
+
 @check("transcripts are read as UTF-8, not the local code page")
 def t_utf8():
     ex = load_driver().find_extractor()
@@ -374,7 +441,7 @@ def t_agent_live():
 
 LOCAL = [t_import, t_extractor_compiles, t_high, t_low, t_bounds, t_degenerate,
          t_schema_guard, t_digest, t_no_average, t_cadence, t_cli, t_json,
-         t_ascii, t_utf8]
+         t_ascii, t_redaction, t_perms, t_update_paths, t_no_injection, t_utf8]
 ONLINE = [t_online_version, t_online_consistency]
 AGENT = [t_agent_config, t_agent_rubric, t_agent_readonly]
 LIVE = [t_agent_live]

@@ -26,6 +26,23 @@ import sys
 # Applied to every sampled string before it can reach the output file. Ordered
 # most-specific first so a key is never partially matched by a looser pattern.
 SECRET_PATTERNS = [
+    # Whole private-key blocks first: once the header matches, take the lot.
+    (re.compile(r"-----BEGIN[^-]{0,40}PRIVATE KEY-----[\s\S]*?-----END[^-]{0,40}PRIVATE KEY-----"),
+     "[PRIVATE-KEY]"),
+    (re.compile(r"-----BEGIN[^-]{0,40}PRIVATE KEY-----"), "[PRIVATE-KEY]"),
+    # Cloud and payment credentials. These are high-signal prefixes, so matching
+    # them is safe; a false positive only costs a mangled sample.
+    (re.compile(r"\b(?:AKIA|ASIA|AROA|AIDA|AGPA|ANPA|ANVA|APKA)[A-Z0-9]{12,}"), "[AWS-KEY-ID]"),
+    (re.compile(r"(?i)\b(aws_secret_access_key|aws_session_token)\b\s*[=:]\s*\S+"),
+     r"[AWS-SECRET]"),
+    (re.compile(r"\b(?:sk|pk|rk)_(?:live|test)_[A-Za-z0-9]{10,}"), "[STRIPE-KEY]"),
+    (re.compile(r"xox[baprs]-[A-Za-z0-9-]{10,}"), "[SLACK-TOKEN]"),
+    (re.compile(r"\bAIza[A-Za-z0-9_\-]{20,}"), "[GOOGLE-KEY]"),
+    (re.compile(r"sk-proj-[A-Za-z0-9_\-]{16,}"), "[API-KEY]"),
+    # A credential assigned to an obviously-named variable, whatever its shape.
+    (re.compile(r"(?i)\b(password|passwd|secret|api[_-]?key|access[_-]?token|"
+                r"auth[_-]?token|private[_-]?key)\b\s*[=:]\s*[\"']?[^\s\"',;]{6,}"),
+     r"[REDACTED-ASSIGNMENT]"),
     (re.compile(r"sk-ant-[A-Za-z0-9_\-]{8,}"), "[API-KEY]"),
     (re.compile(r"(?:github_pat|ghp|gho|ghs|ghu)_[A-Za-z0-9_]{16,}"), "[GH-TOKEN]"),
     (re.compile(r"eyJ[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]{10,}\.[A-Za-z0-9_\-]+"), "[JWT]"),
@@ -588,7 +605,9 @@ def build_pack(sessions: dict, days, include_samples: bool, sample_n: int) -> di
     projects_out = []
     for name, p in sorted(per_project.items(), key=lambda kv: -kv[1]["sessions"])[:25]:
         projects_out.append({
-            "project": name,
+            # Derived from a directory name, so it can carry PII — a cloud-drive
+            # mount named after the account email is the usual offender.
+            "project": redact(name),
             "sessions": p["sessions"],
             "user_turns": p["user_turns"],
             "hours": round(p["minutes"] / 60, 1),
@@ -861,7 +880,7 @@ def build_pack(sessions: dict, days, include_samples: bool, sample_n: int) -> di
         # actually opens a hard problem.
         top = sorted(real, key=lambda s: -(s.user_turns + sum(s.tools.values()) / 10))
         pack["session_samples"] = [{
-            "project": s.project,
+            "project": redact(s.project),
             "date": s.start.date().isoformat() if s.start else None,
             "human_turns": s.user_turns,
             "active_minutes": round(s.active_min, 1),
@@ -923,7 +942,14 @@ def main() -> int:
         print(f"no usable sessions found: {pack['error']}", file=sys.stderr)
         return 1
     text = json.dumps(pack, indent=2, ensure_ascii=False)
-    pathlib.Path(args.out).write_text(text, encoding="utf-8")
+    out = pathlib.Path(args.out)
+    out.write_text(text, encoding="utf-8")
+    # Behavioural data about one person. On a shared machine the default 0644
+    # would let any other account read it.
+    try:
+        out.chmod(0o600)
+    except OSError:
+        pass
 
     v = pack.get("volume", {})
     print(f"wrote {args.out}  ({len(text) // 1024} KB) — "

@@ -105,6 +105,44 @@ Only the three `PASS` rows gate anything. The `INFO` rows describe the optional
 paid API path — a share-bundle ships without it deliberately, and everything in
 this skill works regardless.
 
+## Safety model
+
+Audited 2026-07-28. What the tool can reach, what it protects, and what it
+cannot protect against.
+
+**What it reads.** Every `.jsonl` under `~/.claude/projects` — the operator's
+entire Claude Code history, including any credential ever pasted into a prompt.
+That is unavoidable for the measurement, so the mitigations are downstream.
+
+**What it writes, and who can read it.** `evidence.json` and `reports/` are
+created `0600`/`0700`. The defaults would be world-readable, which on a shared
+machine means any other account could read someone's prompts and scores.
+
+**Redaction.** Prompt samples *and project names* pass through `redact()`
+before they can reach the pack. Project names matter because they come from
+directory paths, and a cloud-drive mount named after the account email leaks
+that email — this was a real finding, not a hypothetical. Covered: Anthropic /
+OpenAI / GitHub / Slack / Google / Stripe / Supabase keys, AWS key IDs and
+secret assignments, private-key blocks, JWTs, `password=`-style assignments,
+emails, phone numbers, long hex. `--no-samples` removes prompt text entirely.
+
+**Execution surface.** No `shell=True` anywhere, no `eval`, no `exec` of remote
+data, no `pickle`. The only subprocesses are `curl` with fixed arguments and the
+extractor with an argument list the remote cannot influence.
+
+**Update integrity.** `update` resolves `main` to a commit SHA and fetches every
+file from that immutable commit, so the downloaded set is consistent and never
+served stale from a CDN. The file list is a hardcoded tuple, so a compromised
+server cannot name arbitrary paths to overwrite. Downloads are staged, checked
+non-empty, and Python files must compile before anything is replaced.
+
+**The risk that remains, stated plainly.** `update` downloads code and runs it.
+There is no signature verification. Anyone who can push to the source repository
+can execute code on every machine that updates — the same trust you extend to
+any dependency, but worth naming because this one self-modifies. Mitigations
+available to a cautious team: pin to a reviewed commit, vendor the files into
+your own repo, or simply never run `update` and re-install deliberately instead.
+
 ## Keeping it up to date
 
 When the operator asks to **update the skill**, **check for a new version**, or

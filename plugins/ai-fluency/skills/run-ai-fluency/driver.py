@@ -33,10 +33,19 @@ ROOT = HERE.parents[2]
 
 # Bumped whenever the shipped files change. `update` compares this against the
 # published VERSION file; nothing else in the tool touches the network.
-VERSION = "1.1.1"
-UPDATE_BASE = ("https://raw.githubusercontent.com/aisyaturridha-coder/"
-               "ai-fluency-marketplace/main/plugins/ai-fluency/skills/run-ai-fluency")
+VERSION = "1.1.2"
+UPDATE_REPO = "aisyaturridha-coder/ai-fluency-marketplace"
+UPDATE_PATH = "plugins/ai-fluency/skills/run-ai-fluency"
 UPDATE_FILES = ("VERSION", "SKILL.md", "driver.py", "extract-evidence.py")
+
+
+def _raw_base(ref: str) -> str:
+    return f"https://raw.githubusercontent.com/{UPDATE_REPO}/{ref}/{UPDATE_PATH}"
+
+
+# Kept so existing callers and tests still resolve; commit-pinned fetches are
+# what `update` actually uses.
+UPDATE_BASE = _raw_base("main")
 
 
 def find_extractor() -> pathlib.Path | None:
@@ -565,6 +574,19 @@ def installed_version() -> str:
     return VERSION
 
 
+def _resolve_head() -> str:
+    """The commit SHA that `main` currently points at.
+
+    raw.githubusercontent caches by path and ignores query strings, and expires
+    files independently — so branch URLs can serve a new VERSION beside stale
+    code. Commit URLs are immutable, so pinning one SHA makes the downloaded set
+    consistent by construction and never stale.
+    """
+    import json as _json
+    data = _fetch_url(f"https://api.github.com/repos/{UPDATE_REPO}/commits/main")
+    return _json.loads(data.decode())["sha"]
+
+
 def _fetch(name: str, bust: str = "") -> bytes:
     """Fetch one published file, tolerating a broken Python CA bundle.
 
@@ -579,7 +601,11 @@ def _fetch(name: str, bust: str = "") -> bytes:
     system trust store and is present on macOS and Windows 10+, so it is the
     fallback rather than disabling verification — which would defeat the point.
     """
-    url = f"{UPDATE_BASE}/{name}" + (f"?v={bust}" if bust else "")
+    ref = bust or "main"
+    return _fetch_url(f"{_raw_base(ref)}/{name}")
+
+
+def _fetch_url(url: str) -> bytes:
     try:
         import urllib.request
         req = urllib.request.Request(url, headers={"User-Agent": "ai-fluency-update"})
@@ -612,15 +638,15 @@ def cmd_update(dry_run: bool) -> int:
     print(f"  installed  {c(local, CYA)}")
 
     try:
-        import time
-        remote = _fetch("VERSION", bust=str(int(time.time()))).decode().strip()
+        sha = _resolve_head()
+        remote = _fetch("VERSION", bust=sha).decode().strip()
     except Exception as e:
         print(f"  {c('could not reach the update server', RED)}")
         print(f"  {c(str(e), DIM)}")
         print(f"\n  {c('Nothing was changed. Check your connection and retry.', DIM)}")
         return 1
 
-    print(f"  published  {c(remote, CYA)}\n")
+    print(f"  published  {c(remote, CYA)}  {c('@ ' + sha[:10], DIM)}\n")
     if remote == local:
         print(f"  {c('Already up to date.', GRN)}\n")
         return 0
@@ -628,7 +654,7 @@ def cmd_update(dry_run: bool) -> int:
     staged: dict[str, bytes] = {}
     for name in UPDATE_FILES:
         try:
-            staged[name] = _fetch(name, bust=remote)
+            staged[name] = _fetch(name, bust=sha)
         except Exception as e:
             print(f"  {c('failed to download ' + name, RED)} {c(str(e), DIM)}")
             print(f"\n  {c('Nothing was changed.', DIM)}")
@@ -745,6 +771,11 @@ def main() -> int:
         dest = BASE / "reports" / f"cert-{cert['digest_short']}.json"
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_text(args.pack.read_text(encoding="utf-8"), encoding="utf-8")
+        try:
+            dest.chmod(0o600)
+            dest.parent.chmod(0o700)
+        except OSError:
+            pass
         cert["frozen_to"] = str(dest.relative_to(BASE))
 
     if args.json:

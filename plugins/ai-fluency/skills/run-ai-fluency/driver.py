@@ -36,7 +36,7 @@ ROOT = HERE.parents[2]
 
 # Bumped whenever the shipped files change. `update` compares this against the
 # published VERSION file; nothing else in the tool touches the network.
-VERSION = "1.3.0"
+VERSION = "1.4.0"
 UPDATE_REPO = "aisyaturridha-coder/ai-fluency-marketplace"
 UPDATE_PATH = "plugins/ai-fluency/skills/run-ai-fluency"
 UPDATE_FILES = ("VERSION", "SKILL.md", "driver.py", "extract-evidence.py")
@@ -249,6 +249,72 @@ def fmt_value(value) -> str:
             return str(int(value))
         return f"{value:.2f}".rstrip("0").rstrip(".")
     return str(value)
+
+
+def fmt_usd(value) -> str:
+    """Money, formatted once so every surface agrees. See fmt_value."""
+    try:
+        v = float(value)
+    except (TypeError, ValueError):
+        return "—"
+    if abs(v) >= 1000:
+        return f"${v:,.0f}"
+    return f"${v:,.2f}"
+
+
+# A well-briefed session's reconnaissance calls. The briefing-overhead figure is
+# a floor, and this constant is its one assumption — named here rather than
+# buried in the arithmetic so it can be argued with.
+BRIEFING_BASELINE_CALLS = 5
+
+
+def cost_summary(pack: dict) -> dict | None:
+    """What the four scores cost, priced from the pack.
+
+    Cost is the price of the scores, not a fifth dimension — every figure is
+    attributed to the dimension that drives it. Returns None when the pack
+    carries no cost block, so older packs simply render without the section.
+    """
+    cost = pack.get("cost") or {}
+    total = cost.get("total_usd") or 0
+    if not total:
+        return None
+    eff = pack.get("efficiency_ratios") or {}
+    by_model = cost.get("by_model_usd") or {}
+    cache = cost.get("cache") or {}
+    brief = eff.get("briefing_overhead") or {}
+
+    models = [{"model": m, "usd": v,
+               "share_pct": round(100.0 * v / total, 1) if total else 0.0}
+              for m, v in sorted(by_model.items(), key=lambda kv: -kv[1])]
+    top_share = sum(m["share_pct"] for m in models
+                    if "sonnet" not in m["model"] and "haiku" not in m["model"])
+
+    median = brief.get("median_recon_calls_before_first_edit")
+    measured = brief.get("sessions_measured")
+    per_call = eff.get("usd_per_tool_call")
+    floor = None
+    if median and measured and per_call and median > BRIEFING_BASELINE_CALLS:
+        floor = round((median - BRIEFING_BASELINE_CALLS) * measured * per_call, 2)
+
+    return {
+        "total_usd": total,
+        "basis": cost.get("_basis", ""),
+        "models": models,
+        "top_tier_share_pct": round(top_share, 1),
+        "ratios": [r for r in (
+            ("Per session", eff.get("usd_per_session"), "—"),
+            ("Per landed session", eff.get("usd_per_landed_session"), "Diligence"),
+            ("Per human instruction", eff.get("usd_per_human_instruction"), "Delegation"),
+            ("Per tool call", eff.get("usd_per_tool_call"), "—"),
+        ) if r[1] is not None],
+        "unlanded_usd": eff.get("unlanded_session_usd"),
+        "unlanded_pct": eff.get("unlanded_share_of_spend_pct"),
+        "briefing": {"median": median, "sessions": measured,
+                     "baseline": BRIEFING_BASELINE_CALLS, "floor_usd": floor},
+        "cache_hit_pct": cache.get("cache_hit_ratio_pct"),
+        "cache_read_tokens": cache.get("cache_read_tokens"),
+    }
 
 
 def score_pack(pack: dict) -> dict:
@@ -612,6 +678,7 @@ def _esc(s) -> str:
 def build_report(pack: dict, scores: dict, subject: str) -> str:
     cert = certificate(pack, scores)
     cad = cadence(pack)
+    cost_html = cost_section_html(cost_summary(pack))
     win = pack["window"]
     order = [d for d in cert["profile_order"] if d in scores]
 
@@ -700,7 +767,12 @@ font-size:.77rem;font-weight:500;padding:.1em .45em;border:1px solid currentColo
 .rec h3{{margin:0 0 .3rem}}.rec p{{margin:0 0 .6rem;font-size:.9rem;color:var(--soft)}}
 .rec .meta{{font-family:ui-monospace,Menlo,monospace;font-size:.78rem;color:var(--faint)}}
 .rec .target{{color:var(--seal);font-family:ui-monospace,Menlo,monospace;font-size:.8rem;margin:0}}
-.plain{{color:var(--soft);font-size:.92rem}}ul{{padding-left:1.15rem}}li{{margin-bottom:.5rem;color:var(--soft);font-size:.9rem}}
+.caveat{{border:1px solid var(--flag);background:var(--flag-bg);padding:.9rem 1.1rem;
+font-size:.87rem;line-height:1.55;margin:0 0 1.2rem}}.caveat b{{color:var(--flag)}}
+h3.sub{{font:600 .8rem/1 ui-monospace,Menlo,monospace;letter-spacing:.14em;
+text-transform:uppercase;color:var(--seal);margin:1.8rem 0 .5rem}}
+td.anc{{color:var(--faint)}}
+.tw{{overflow-x:auto}}.plain{{color:var(--soft);font-size:.92rem}}ul{{padding-left:1.15rem}}li{{margin-bottom:.5rem;color:var(--soft);font-size:.9rem}}
 footer{{margin-top:3.5rem;padding-top:1.3rem;border-top:2px solid var(--ink);
 font-size:.83rem;color:var(--faint);line-height:1.6}}
 </style></head><body><div class="wrap">
@@ -745,6 +817,8 @@ anchor it maps to. Dimension scores are the rounded mean of their rows.</p>
 5 Structural · 4 Deliberate · 3 Habitual · 2 Unreliable · 1 Occasional.</p>
 </section>
 
+{cost_html}
+
 <section><h2>Validity window</h2>
 <p class="plain">This record covers {cad["sessions_observed"]} sessions across
 {cad["calendar_days"]} days — about <span class="mono">{cad["sessions_per_day"]}</span> per day.
@@ -786,6 +860,75 @@ Skill package: <a href="{_esc(SKILL_PACKAGE_URL)}">{_esc(SKILL_PACKAGE_URL)}</a>
 install with <code>/plugin marketplace add {_esc(UPDATE_REPO)}</code> then
 <code>/plugin install {_esc(SKILL_PACKAGE_NAME)}</code>, and score your own.</footer>
 </div></body></html>"""
+
+
+def cost_section_html(cs: dict) -> str:
+    """The cost block, shared by the HTML record and the print edition.
+
+    One renderer for both so the priced view cannot drift between surfaces.
+    The 'not money spent' caveat leads, because the figure is large enough to
+    be badly misread if it arrives without it.
+    """
+    if not cs:
+        return ""
+    models = "".join(
+        f'<tr><td>{_esc(m["model"])}</td>'
+        f'<td class="n">{_esc(fmt_usd(m["usd"]))}</td>'
+        f'<td class="n">{_esc(fmt_value(m["share_pct"]))}%</td></tr>'
+        for m in cs["models"])
+    ratios = "".join(
+        f'<tr><td>{_esc(label)}</td><td class="n">{_esc(fmt_usd(v))}</td>'
+        f'<td class="anc">{_esc(attr)}</td></tr>'
+        for label, v, attr in cs["ratios"])
+
+    br = cs["briefing"]
+    brief_html = ""
+    if br["floor_usd"]:
+        brief_html = (
+            f'<p><b>What weak Description costs — a floor.</b> A median of '
+            f'{br["median"]} reconnaissance calls before the first edit, against a '
+            f'well-briefed baseline of about {br["baseline"]}. The excess across '
+            f'{br["sessions"]} sessions is roughly <b>{_esc(fmt_usd(br["floor_usd"]))}</b>. '
+            'That is a floor, not a total: every recon result also re-enters the '
+            'context window on later turns, which this pack cannot size.</p>')
+
+    unlanded = ""
+    if cs["unlanded_usd"] is not None:
+        unlanded = (
+            f'<p><b>Sessions that never committed:</b> {_esc(fmt_usd(cs["unlanded_usd"]))} '
+            f'({_esc(fmt_value(cs["unlanded_pct"]))}% of spend). Not waste by itself — '
+            'reading and research sessions should not commit. It is simply the pool any '
+            'efficiency gain would come out of.</p>')
+
+    cache = ""
+    if cs["cache_hit_pct"] is not None:
+        cache = (
+            f'<p><b>One number that is not about skill:</b> the cache hit ratio is '
+            f'{_esc(fmt_value(cs["cache_hit_pct"]))}%. That is the harness caching '
+            'automatically, not a credit to the operator — but it is why context you '
+            'make the agent rebuild compounds.</p>')
+
+    return f"""<section><h2>What this costs</h2>
+<p class="sn">Cost is the price of the four scores, not a fifth dimension. Every figure
+is attributed to the dimension that drives it.</p>
+<p class="caveat"><b>Read this before any number below.</b>
+{_esc(fmt_usd(cs["total_usd"]))} is <b>API-equivalent</b>, computed locally from token
+counts at list prices. Claude Code on a subscription is <b>not billed this way</b> — the
+figure answers &ldquo;what would this usage have cost through the API&rdquo;, which is what
+makes sessions and models comparable. <b>It is not money spent.</b></p>
+<h3 class="sub">Model routing — the Delegation score, priced</h3>
+<p>{_esc(fmt_value(cs["top_tier_share_pct"]))}% of the total sits on tiers above Sonnet.
+Routing by task weight is the lever here.</p>
+<div class="tw"><table><thead><tr><th>Model</th>
+<th style="text-align:right">API-equivalent</th>
+<th style="text-align:right">Share</th></tr></thead><tbody>{models}</tbody></table></div>
+<h3 class="sub">Cost per outcome</h3>
+<p>Lower is better only when the outcome holds constant — read these against the 4D
+scores, not alone.</p>
+<div class="tw"><table><thead><tr><th>Ratio</th>
+<th style="text-align:right">Value</th><th>Attributable to</th></tr></thead>
+<tbody>{ratios}</tbody></table></div>
+{unlanded}{brief_html}{cache}</section>"""
 
 
 # --- print edition (PDF) ---------------------------------------------------
@@ -831,6 +974,17 @@ def render_pdf(html_path: pathlib.Path, pdf_path: pathlib.Path,
 def build_print_html(pack: dict, scores: dict, subject: str) -> str:
     cert = certificate(pack, scores)
     cad = cadence(pack)
+    cost_html = cost_section_html(cost_summary(pack))
+    # A pack with no cost block simply drops the page; the notes page renumbers.
+    cost_page = ""
+    if cost_html:
+        cost_page = (
+            f'<section class="page"><div class="ph"><span>What this costs</span>'
+            f'<span>{_esc(subject)} &middot; digest {_esc(cert["digest_short"])}</span></div>'
+            f'{cost_html}<div class="pf"><span>Page 3 of 4 &middot; cost and efficiency</span>'
+            f'<span>API-equivalent &mdash; not money spent</span></div></section>')
+    notes_page_no = 4 if cost_html else 3
+    total_pages = 4 if cost_html else 3
     prac = practices_for(scores, limit=6)
     win = pack["window"]
     start = (win.get("first_session") or "")[:10]
@@ -980,6 +1134,12 @@ text-transform:uppercase;color:#1F6B63;margin:0 0 2.5mm}}
 ul{{padding-left:4mm;margin:0}}li{{margin-bottom:1.4mm}}
 .two table{{font-size:7.8pt}}.two td,.two th{{padding:1.4mm 4pt 1.4mm 0}}
 .two td.n{{width:14mm}}
+.tw{{overflow-x:auto;margin-bottom:2mm}}
+.caveat{{border:.75pt solid #C2571E;background:#FBEDE4;padding:3mm 4mm;
+font-size:7.8pt;line-height:1.5;margin:0 0 4mm}}.caveat b{{color:#C2571E}}
+.pagesec h3.sub{{margin:5mm 0 2mm}}
+.pagesec p{{font-size:8.2pt;line-height:1.5;color:#4A5464;margin:0 0 2.5mm}}
+.pagesec table{{font-size:8.2pt;margin-bottom:1mm}}
 </style></head><body>
 
 <section class="page scrollpg"><div class="scroll">
@@ -1036,9 +1196,11 @@ ul{{padding-left:4mm;margin:0}}li{{margin-bottom:1.4mm}}
   <p class="anchors"><b>Grade anchors.</b> Assigned by matching a measured value to a
   fixed band. 5&nbsp;Structural &middot; 4&nbsp;Deliberate &middot; 3&nbsp;Habitual &middot;
   2&nbsp;Unreliable &middot; 1&nbsp;Occasional.</p>
-  <div class="pf"><span>Page 2 of 3 &middot; transcript</span>
+  <div class="pf"><span>Page 2 of {total_pages} &middot; transcript</span>
   <span>{_esc(start)} &rarr; {_esc(end)}</span></div>
 </section>
+
+{cost_page}
 
 <section class="page">
   <div class="ph"><span>Recommendations, validity &amp; method</span>
@@ -1086,7 +1248,7 @@ ul{{padding-left:4mm;margin:0}}li{{margin-bottom:1.4mm}}
       </ul>
     </div>
   </div>
-  <div class="pf"><span>Page 3 of 3 &middot; recommendations, validity &amp; method</span>
+  <div class="pf"><span>Page {notes_page_no} of {total_pages} &middot; recommendations, validity &amp; method</span>
   <span>Skill package &middot; github.com/{_esc(UPDATE_REPO)}</span></div>
 </section>
 
@@ -1131,8 +1293,10 @@ def cmd_report_pdf(pack: dict, scores: dict, out: pathlib.Path, subject: str) ->
     except OSError:
         pass
     print(f"  {c('written', GRN)}  {pdf_out}")
-    print(f"  {c(str(pdf_out.stat().st_size // 1024) + ' KB · 3 A4 pages — scroll, '
-                'transcript, notes', DIM)}")
+    priced = cost_summary(pack) is not None
+    shape = ("4 A4 pages — scroll, transcript, cost, notes" if priced
+             else "3 A4 pages — scroll, transcript, notes")
+    print(f"  {c(str(pdf_out.stat().st_size // 1024) + ' KB · ' + shape, DIM)}")
     print(f"  {c('renderer', DIM)}  {c(chrome, DIM)}")
     print(f"\n  {c('Print source kept alongside: ' + html_out.name, DIM)}\n")
     return 0

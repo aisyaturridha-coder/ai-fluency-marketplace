@@ -355,20 +355,33 @@ def t_format_consistency():
     return "terminal = html = pdf"
 
 
-@check("print edition is exactly three A4 pages and keeps the disclaimer")
+@check("print edition paginates correctly and keeps both disclaimers")
 def t_print_edition():
     m = load_driver()
     pack = make_pack()
     sc = m.score_pack(pack)
-    doc = m.build_print_html(pack, sc, "tester")
-    # Three <section class="page">, no more: a fourth means something overflowed
-    # into a page the layout never accounted for.
-    assert doc.count('class="page') == 3, f'expected 3 pages, got {doc.count(chr(34))}'
+    doc = pdf = m.build_print_html(pack, sc, "tester")
+    html = m.build_report(pack, sc, "tester")
+    # Four pages when the pack carries cost, three without it. Any other count
+    # means a section landed on a page the layout never accounted for.
+    n = doc.count('class="page')
+    assert n == 4, f"expected 4 pages with a cost block, got {n}"
     assert "@page" in doc and "210mm" in doc, "not sized for A4"
     for section in ("Certificate of AI Fluency", "Transcript of record",
-                    "Validity window", "Method and limits",
+                    "What this costs", "Validity window", "Method and limits",
                     "How to raise these scores"):
         assert section in doc, f"print edition is missing {section!r}"
+    assert "Page 2 of 4" in doc and "Page 4 of 4" in doc, "footers did not renumber"
+
+    # A pack with no cost block drops the page and renumbers rather than
+    # rendering an empty one.
+    nocost = make_pack()
+    nocost["cost"] = {}
+    d3 = m.build_print_html(nocost, m.score_pack(nocost), "tester")
+    n3 = d3.count('class="page')
+    assert n3 == 3, f"expected 3 pages without cost, got {n3}"
+    assert "What this costs" not in d3, "empty cost section rendered"
+    assert "Page 2 of 3" in d3 and "Page 3 of 3" in d3, "footers did not renumber down"
     # The scroll layout reads as a credential, so the denial must survive.
     assert "No organisation has accredited it" in doc, "disclaimer dropped"
     assert "confers no qualification" in doc, "disclaimer weakened"
@@ -377,7 +390,12 @@ def t_print_edition():
     for dim, data in sc.items():
         for sub in data["subs"]:
             assert sub["label"] in doc, f"sub-signal missing: {sub['label']}"
-    return "3 pages, disclaimer intact"
+    # The priced total is large and reads as money unless the caveat travels
+    # with it. Same class of claim as the accreditation denial.
+    for doc, where in ((html, "html"), (pdf, "pdf")):
+        assert "API-equivalent" in doc, f"{where}: cost caveat missing"
+        assert "not money spent" in doc, f"{where}: 'not money spent' dropped"
+    return "4 pages w/ cost, 3 without; disclaimers intact"
 
 
 @check("pdf rendering shells out safely and degrades without a browser")

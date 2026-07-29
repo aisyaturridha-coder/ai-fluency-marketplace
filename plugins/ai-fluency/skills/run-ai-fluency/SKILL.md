@@ -284,6 +284,37 @@ full-width they push the validity and method blocks off the bottom of A4. If you
 add content to that page, re-render and look at page 3 — a page-count check will
 not catch an overflow, because the excess is clipped rather than reflowed.
 
+### What the cost section gives you
+
+Both the HTML record and the print edition carry a **What this costs** block,
+computed from the pack's `cost` and `efficiency_ratios`:
+
+- **Model routing, priced** — spend per model and each one's share. This is the
+  Delegation score expressed in money.
+- **Cost per outcome** — per session, per landed session, per human instruction,
+  per tool call, each attributed to the dimension that drives it.
+- **Sessions that never committed** — the pool any efficiency gain comes out of.
+  Not waste by itself; reading and research sessions should not commit.
+- **What weak Description costs** — a floor, from excess reconnaissance calls
+  over `BRIEFING_BASELINE_CALLS` (5). Named as a constant so the assumption can
+  be argued with rather than hidden in the arithmetic.
+- **Cache hit ratio** — labelled as *not* a credit to the operator, because the
+  harness does it automatically.
+
+**The caveat is mandatory and a test enforces it.** The total is
+**API-equivalent** — computed locally from token counts at list prices, so
+sessions and models are comparable. Claude Code on a subscription is not billed
+this way. It is **not money spent**, and at five figures it will be badly
+misread if that sentence ever goes missing.
+
+Packs with no `cost` block simply render without the section, and the print
+edition drops from four pages to three with its footers renumbering.
+
+> A trap worth knowing: the print stylesheet's `.scroll` is the **page-1
+> certificate frame** (teal border, gold inner rule, 12mm padding). Wrapping a
+> table in it silently draws a certificate box around the table and pushes the
+> page over A4. Table wrappers use `.tw`.
+
 ### Output format is fixed, for everyone
 
 Two people's records are only comparable if they are formatted the same way.

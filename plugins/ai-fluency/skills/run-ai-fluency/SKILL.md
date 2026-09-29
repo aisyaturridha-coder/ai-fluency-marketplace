@@ -16,9 +16,15 @@ call, no agent to create, and nothing billed. The second half (`assess.sh`)
 posts the pack to a Managed Agent for a written narrative assessment; that
 costs money and is documented last.
 
-All paths below are relative to the unit root — the directory containing
-`extract-evidence.py`. The driver resolves the root from its own location, so
-it works from any working directory.
+Every command below runs the driver through `${CLAUDE_SKILL_DIR}`, which
+Claude Code replaces with this skill's own folder. That works the same whether
+the skill was installed as a plugin (it lives in the plugin cache), copied to
+`~/.claude/skills/`, or committed into a repo's `.claude/skills/`. Do not
+rewrite the commands to a fixed `./.claude/skills/...` path: in a plugin
+install that path does not exist. The driver resolves its own data paths from
+its location, so it works from any working directory.
+
+On Windows use `python` or `py` in place of `python3`.
 
 ## Install (sharing this with someone else)
 
@@ -26,8 +32,8 @@ The skill is self-contained when `extract-evidence.py` sits **beside**
 `driver.py`; the driver checks there first, then falls back to the unit root.
 So the whole thing travels as one directory.
 
-**For a team — publish it as a plugin.** Push a marketplace repo (see
-`SKILLS/ai-fluency-marketplace/` for a working one) and everybody runs two
+**For a team — publish it as a plugin.** This repository is the marketplace
+(github.com/aisyaturridha-coder/ai-fluency-marketplace). Everybody runs two
 lines once:
 
 ```bash
@@ -85,9 +91,12 @@ cp1252 console; they have not been exercised on a real Windows machine.
 ## Prerequisites
 
 Nothing to install. Python 3.9+ (stdlib only) and the transcripts themselves.
+The stock `python3` on macOS is 3.9, so the code must stay parseable there:
+no f-string may split its `{expression}` across lines (legal only from 3.12).
+`smoke.py` enforces this on every interpreter; keep that check.
 
 ```bash
-./.claude/skills/run-ai-fluency/driver.py check
+python3 "${CLAUDE_SKILL_DIR}/driver.py" check
 ```
 
 Verified output on a working setup:
@@ -149,7 +158,7 @@ When the operator asks to **update the skill**, **check for a new version**, or
 says anything like "am I on the latest" — run:
 
 ```bash
-./.claude/skills/run-ai-fluency/driver.py update
+python3 "${CLAUDE_SKILL_DIR}/driver.py" update
 ```
 
 It compares the installed `VERSION` against the published one, downloads the
@@ -170,26 +179,26 @@ version check to `check` or `score`.
 One command does the whole local pipeline — extract, score, practices, cadence:
 
 ```bash
-./.claude/skills/run-ai-fluency/driver.py all
+python3 "${CLAUDE_SKILL_DIR}/driver.py" all
 ```
 
 Or a step at a time:
 
 ```bash
-./.claude/skills/run-ai-fluency/driver.py extract
-./.claude/skills/run-ai-fluency/driver.py cert
-./.claude/skills/run-ai-fluency/driver.py score
-./.claude/skills/run-ai-fluency/driver.py practices
-./.claude/skills/run-ai-fluency/driver.py cadence
+python3 "${CLAUDE_SKILL_DIR}/driver.py" extract
+python3 "${CLAUDE_SKILL_DIR}/driver.py" cert
+python3 "${CLAUDE_SKILL_DIR}/driver.py" score
+python3 "${CLAUDE_SKILL_DIR}/driver.py" practices
+python3 "${CLAUDE_SKILL_DIR}/driver.py" cadence
 ```
 
 Useful flags:
 
 ```bash
-./.claude/skills/run-ai-fluency/driver.py extract --days 30
-./.claude/skills/run-ai-fluency/driver.py extract --no-samples
-./.claude/skills/run-ai-fluency/driver.py score --json
-./.claude/skills/run-ai-fluency/driver.py cadence --pack /tmp/w30.json
+python3 "${CLAUDE_SKILL_DIR}/driver.py" extract --days 30
+python3 "${CLAUDE_SKILL_DIR}/driver.py" extract --no-samples
+python3 "${CLAUDE_SKILL_DIR}/driver.py" score --json
+python3 "${CLAUDE_SKILL_DIR}/driver.py" cadence --pack /tmp/w30.json
 ```
 
 `--no-samples` strips every prompt excerpt, leaving metrics only. `--json`
@@ -231,8 +240,8 @@ Terminal output is fine for the operator, but useless to send anyone. `report`
 writes **one self-contained HTML file**:
 
 ```bash
-./.claude/skills/run-ai-fluency/driver.py report --subject "Your Name"
-./.claude/skills/run-ai-fluency/driver.py report -o ~/Desktop/my-fluency.html
+python3 "${CLAUDE_SKILL_DIR}/driver.py" report --subject "Your Name"
+python3 "${CLAUDE_SKILL_DIR}/driver.py" report -o ~/Desktop/my-fluency.html
 ```
 
 Inside it: the **certificate** (profile, floor, safety posture, verification
@@ -257,7 +266,7 @@ certificate", "as a document", or wants something to share.
 Three A4 pages, for printing or attaching where an HTML file would be awkward:
 
 ```bash
-./.claude/skills/run-ai-fluency/driver.py report --pdf --subject "Your Name"
+python3 "${CLAUDE_SKILL_DIR}/driver.py" report --pdf --subject "Your Name"
 ```
 
 | Page | |
@@ -359,8 +368,8 @@ Verification means re-running `cert` against **the same pack**, which is exactly
 deterministic. Use `--freeze` to archive that pack so the record stays checkable:
 
 ```bash
-./.claude/skills/run-ai-fluency/driver.py cert --freeze
-./.claude/skills/run-ai-fluency/driver.py cert --pack reports/cert-<digest8>.json
+python3 "${CLAUDE_SKILL_DIR}/driver.py" cert --freeze
+python3 "${CLAUDE_SKILL_DIR}/driver.py" cert --pack reports/cert-<digest8>.json
 ```
 
 Re-running `extract` gives a *different* digest, and that is correct rather than
@@ -399,9 +408,9 @@ To reuse the scorer without the CLI:
 
 ```bash
 python3 -c "
-import sys; sys.path.insert(0, '.claude/skills/run-ai-fluency')
+import sys, os; d = os.path.expandvars('${CLAUDE_SKILL_DIR}'); sys.path.insert(0, d)
 import importlib.util as u
-s = u.spec_from_file_location('drv', '.claude/skills/run-ai-fluency/driver.py')
+s = u.spec_from_file_location('drv', os.path.join(d, 'driver.py'))
 m = u.module_from_spec(s); s.loader.exec_module(m)
 pack = m.load_pack(m.DEFAULT_PACK)
 print({k: v['score'] for k, v in m.score_pack(pack).items()})
@@ -413,6 +422,10 @@ Verified output: `{'Delegation': 2, 'Description': 2, 'Discernment': 4, 'Diligen
 and `cadence days: 23`.
 
 ## Run (API path — costs money, NOT exercised in this session)
+
+Not shipped in the plugin: `assess.sh` and `setup.sh` live only in the
+author's development folder. If the operator asks for the narrative assessment
+and the files are absent, say so instead of trying to recreate them.
 
 `./assess.sh` posts the pack to a Managed Agent for a written narrative and
 saves a timestamped report to `reports/`. It needs `AGENT=skill ./setup.sh`
@@ -460,5 +473,7 @@ when the narrative is wanted on top of the numbers.
 | `no evidence pack at …` | never extracted, or wrong `--pack` | `driver.py extract` |
 | `wrote … — 0 sessions, 0 projects` | extractor swallowed a per-file exception on every file (a `__slots__` mismatch does this) | the extractor now exits 1 on an empty pack; if it recurs, run `python3 -m py_compile extract-evidence.py` and read the skipped-file warnings on stderr |
 | `no matches found: …/SKILL.md` | zsh glob with no match | use `find`, see Gotchas |
+| `SyntaxError: unterminated string literal` in `driver.py` on Python 3.9 to 3.11 | version 1.4.0 used a 3.12-only f-string form | `driver.py update` cannot run in this state; reinstall instead: `/plugin marketplace update aisya-skills` then `/plugin update ai-fluency@aisya-skills` (1.4.1 fixes it) |
+| `No such file or directory: ./.claude/skills/run-ai-fluency/driver.py` | an old command copied with a fixed path | use `"${CLAUDE_SKILL_DIR}/driver.py"` |
 | Colour codes in a captured file | ANSI escapes | prefix `NO_COLOR=1` |
 | `A[@]: unbound variable` from `assess.sh` | macOS bash 3.2 expands an empty array under `set -u` | already guarded with `${arr[@]+"${arr[@]}"}`; keep that idiom |

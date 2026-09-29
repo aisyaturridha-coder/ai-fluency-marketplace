@@ -36,7 +36,7 @@ ROOT = HERE.parents[2]
 
 # Bumped whenever the shipped files change. `update` compares this against the
 # published VERSION file; nothing else in the tool touches the network.
-VERSION = "1.4.0"
+VERSION = "1.4.1"
 UPDATE_REPO = "aisyaturridha-coder/ai-fluency-marketplace"
 UPDATE_PATH = "plugins/ai-fluency/skills/run-ai-fluency"
 UPDATE_FILES = ("VERSION", "SKILL.md", "driver.py", "extract-evidence.py")
@@ -1312,10 +1312,8 @@ def cmd_report(pack: dict, scores: dict, out: pathlib.Path, subject: str) -> int
         pass
     print(c("\nREPORT\n", BOLD))
     print(f"  {c('written', GRN)}  {out}")
-    print(f"  {c(str(len(html) // 1024) + ' KB · certificate, transcript, '
-                'validity window, method', DIM)}")
-    print(f"\n  {c('Open it in a browser. Renders offline — the only external '
-                  'reference is the skill-package link.', DIM)}")
+    print(f"  {c(str(len(html) // 1024) + ' KB · certificate, transcript, validity window, method', DIM)}")
+    print(f"\n  {c('Open it in a browser. Renders offline — the only external reference is the skill-package link.', DIM)}")
     print(f"  {c('Ranked advice lives in `driver.py practices`.', DIM)}\n")
     return 0
 

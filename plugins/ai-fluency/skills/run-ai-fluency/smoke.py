@@ -141,6 +141,33 @@ def t_extractor_compiles():
     return str(ex.name)
 
 
+@check("no f-string spans lines (Python 3.9 to 3.11 cannot parse it)")
+def t_py39_fstrings():
+    """PEP 701 lets 3.12+ split an f-string's {expression} across lines. macOS
+    ships Python 3.9, where that is a SyntaxError that kills every command,
+    including `update`. This check fails on any interpreter, not only old ones."""
+    import tokenize
+    bad = []
+    for name in ("driver.py", "extract-evidence.py"):
+        path = HERE / name
+        with open(path, "rb") as fh:
+            toks = list(tokenize.tokenize(fh.readline))
+        start = getattr(tokenize, "FSTRING_START", None)
+        end = getattr(tokenize, "FSTRING_END", None)
+        if start is None:  # < 3.12: a multi-line f-string would not have compiled at all
+            continue
+        stack = []
+        for t in toks:
+            if t.type == start:
+                stack.append(t)
+            elif t.type == end and stack:
+                s = stack.pop()
+                if t.start[0] != s.start[0] and not s.string.endswith(('"""', "\'\'\'")):
+                    bad.append(f"{name}:{s.start[0]}")
+    assert not bad, "multi-line f-string at " + ", ".join(bad)
+    return "clean"
+
+
 @check("a strong pack scores near the top")
 def t_high():
     m = load_driver()
@@ -585,7 +612,7 @@ def t_agent_live():
     return "session completed"
 
 
-LOCAL = [t_import, t_extractor_compiles, t_high, t_low, t_bounds, t_degenerate,
+LOCAL = [t_import, t_extractor_compiles, t_py39_fstrings, t_high, t_low, t_bounds, t_degenerate,
          t_schema_guard, t_digest, t_no_average, t_cadence, t_cli, t_json,
          t_ascii, t_report, t_format_consistency, t_print_edition, t_pdf_invocation, t_report_escaping,
          t_redaction, t_perms, t_update_paths, t_no_injection, t_utf8]

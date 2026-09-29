@@ -13,7 +13,8 @@
         "name": "aisyaridha"
       },
       "source": "./plugins/ai-fluency",
-      "category": "productivity"
+      "category": "productivity",
+      "version": "1.4.1"
     }
   ]
 }
